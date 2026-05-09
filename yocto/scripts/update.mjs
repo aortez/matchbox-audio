@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 
+import { spawnSync } from 'child_process';
+import { createReadStream, createWriteStream, mkdtempSync, rmSync, statSync } from 'fs';
+import { tmpdir } from 'os';
 import { basename, dirname, join } from 'path';
+import { pipeline } from 'stream/promises';
 import { fileURLToPath } from 'url';
+import { createGunzip, createGzip } from 'zlib';
 
 import {
   calculateChecksum,
-  cleanupPreparedImage,
   colors,
   configureSSHKey,
   error,
@@ -14,7 +18,6 @@ import {
   info,
   loadConfig,
   log,
-  prepareRootfs,
   remoteFlashWithKey,
   run,
   runCapture,
@@ -74,6 +77,80 @@ async function ensureSshKeyConfig() {
   return configureSSHKey(CONFIG_FILE);
 }
 
+function runJson(command, args) {
+  const result = spawnSync(command, args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  if (result.status !== 0) {
+    const stderr = result.stderr.trim();
+    throw new Error(`${command} ${args.join(' ')} failed${stderr ? `: ${stderr}` : ''}`);
+  }
+
+  return JSON.parse(result.stdout);
+}
+
+function rootfsPartitionFromWic(wicPath) {
+  const partitionTable = runJson('sfdisk', ['--json', wicPath]).partitiontable;
+  const rootfs = partitionTable?.partitions?.[1];
+  const sectorSize = partitionTable?.sectorsize || 512;
+
+  if (!rootfs || !Number.isInteger(rootfs.start) || !Number.isInteger(rootfs.size)) {
+    throw new Error('Could not find rootfs A partition in WIC image.');
+  }
+
+  const start = rootfs.start * sectorSize;
+  const size = rootfs.size * sectorSize;
+  const end = start + size - 1;
+  const imageSize = statSync(wicPath).size;
+
+  if (start < 0 || size <= 0 || end >= imageSize) {
+    throw new Error('WIC rootfs partition bounds are invalid.');
+  }
+
+  return { start, end, size };
+}
+
+async function prepareRootfsForRemoteUpdate(imagePath) {
+  const workDir = mkdtempSync(join(tmpdir(), 'matchbox-audio-rootfs-'));
+  const wicPath = join(workDir, 'image.wic');
+  const rootfsRawPath = join(workDir, 'rootfs.ext4');
+  const preparedRootfsPath = join(workDir, 'rootfs.ext4.gz');
+
+  try {
+    info('Decompressing image...');
+    await pipeline(
+      createReadStream(imagePath),
+      createGunzip(),
+      createWriteStream(wicPath),
+    );
+
+    const rootfs = rootfsPartitionFromWic(wicPath);
+    info(`Extracting rootfs A partition (${formatBytes(rootfs.size)})...`);
+    await pipeline(
+      createReadStream(wicPath, { start: rootfs.start, end: rootfs.end }),
+      createWriteStream(rootfsRawPath),
+    );
+
+    info('Compressing rootfs...');
+    await pipeline(
+      createReadStream(rootfsRawPath),
+      createGzip(),
+      createWriteStream(preparedRootfsPath),
+    );
+
+    rmSync(wicPath, { force: true });
+    rmSync(rootfsRawPath, { force: true });
+
+    success('Rootfs prepared.');
+    return { preparedRootfsPath, workDir };
+  } catch (err) {
+    rmSync(workDir, { recursive: true, force: true });
+    throw err;
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
 
@@ -121,7 +198,7 @@ async function main() {
       return;
     }
 
-    prepared = await prepareRootfs(image.path, null, SSH_USERNAME);
+    prepared = await prepareRootfsForRemoteUpdate(image.path);
     const checksum = await calculateChecksum(prepared.preparedRootfsPath);
 
     const mkdirResult = runCapture(
@@ -171,7 +248,7 @@ async function main() {
     success('Remote update complete.');
   } finally {
     if (prepared) {
-      cleanupPreparedImage(prepared.workDir);
+      rmSync(prepared.workDir, { recursive: true, force: true });
     }
   }
 }
