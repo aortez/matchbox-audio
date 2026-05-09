@@ -1,0 +1,79 @@
+# Base KAS configuration for Matchbox Audio Yocto builds.
+#
+# Use kas-matchbox-audio-zero2.yml rather than this file directly.
+
+header:
+  version: 14
+
+distro: poky
+
+repos:
+  poky:
+    url: "https://git.yoctoproject.org/poky"
+    branch: scarthgap
+    layers:
+      meta:
+      meta-poky:
+
+  meta-raspberrypi:
+    url: "https://git.yoctoproject.org/meta-raspberrypi"
+    branch: scarthgap
+
+  meta-openembedded:
+    url: "https://git.openembedded.org/meta-openembedded"
+    branch: scarthgap
+    layers:
+      meta-networking:
+      meta-oe:
+      meta-python:
+
+  meta-rust-bin:
+    url: "https://github.com/rust-embedded/meta-rust-bin.git"
+    branch: master
+
+  meta-pi-base:
+    path: pi-base/yocto/meta-pi-base
+
+  meta-matchbox-audio:
+    path: meta-matchbox-audio
+
+local_conf_header:
+  base: |
+    LICENSE_FLAGS_ACCEPTED = "commercial synaptics-killswitch"
+
+    INIT_MANAGER = "systemd"
+    hostname:pn-base-files = "matchbox-audio"
+
+    IMAGE_FSTYPES = "wic.gz wic.bmap tar.gz"
+    WKS_FILE = "sdimage-ab.wks.in"
+
+    BOOT_DEVICE = "mmcblk0"
+    BOOT_SIZE = "150"
+    ROOTFS_SIZE = "1800"
+
+    # Seed partition size. The flash script grows /data to the card's remaining
+    # space after writing the image.
+    DATA_SIZE = "100"
+
+    PERSISTENT_DATA_APP_DIR = "matchbox-audio"
+    PERSISTENT_DATA_APP_USER = "matchbox"
+    PERSISTENT_DATA_APP_GROUP = "matchbox"
+    PERSISTENT_DATA_APP_MODE = "0755"
+
+    BB_NUMBER_THREADS = "8"
+    PARALLEL_MAKE = "-j 8"
+
+    DL_DIR = "${TOPDIR}/../downloads"
+    SSTATE_DIR = "${TOPDIR}/../sstate-cache"
+
+    INHERIT:remove = "create-spdx"
+
+    PREFERRED_VERSION_rust-bin-cross-arm = "1.86.0"
+    PREFERRED_VERSION_cargo-bin-cross-arm = "1.86.0"
+
+  rpi: |
+    DISABLE_SPLASH = "1"
+    CMDLINE_ROOT_PARTITION = "/dev/mmcblk0p2"
+    CMDLINE:append = " console=tty1"
+
+target: matchbox-audio-image

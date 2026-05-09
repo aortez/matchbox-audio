@@ -35,22 +35,22 @@ there is enough system scaffolding to do so.
 
 ## Phase 1: Early Yocto Image and Remote Deploy Loop
 
-- [ ] Add the pi-base layer/helpers from the `sparkle-duck-shared` repository.
-- [ ] Create Matchbox Audio Yocto layer.
-- [ ] Create image recipe using A/B root filesystems and shared `/data`.
-- [ ] Document the 64 GB card partition assumption:
-  - [ ] boot partition
-  - [ ] root filesystem A
-  - [ ] root filesystem B
-  - [ ] ext4 `/data` partition using the remaining space
-- [ ] Package minimal `mba-player`.
-- [ ] Package minimal `mba-cli`.
-- [ ] Add `mba-player.service`.
-- [ ] Include base networking, SSH, Avahi, NetworkManager, and BlueZ.
-- [ ] Create checked-in `config/hotspot.local.example.json`.
-- [ ] Define gitignored `config/hotspot.local.json`.
-- [ ] Create initial flash script.
-- [ ] Create remote deploy/update script that reuses pi-base helpers.
+- [x] Add the pi-base layer/helpers from the `sparkle-duck-shared` repository.
+- [x] Create Matchbox Audio Yocto layer.
+- [x] Create image recipe using A/B root filesystems and shared `/data`.
+- [x] Document the 64 GB card partition assumption:
+  - [x] boot partition
+  - [x] root filesystem A
+  - [x] root filesystem B
+  - [x] ext4 `/data` partition using the remaining space
+- [x] Package minimal `mba-player`.
+- [x] Package minimal `mba-cli`.
+- [x] Add `mba-player.service`.
+- [x] Include base networking, SSH, Avahi, NetworkManager, and BlueZ.
+- [x] Create checked-in `config/hotspot.local.example.json`.
+- [x] Define gitignored `config/hotspot.local.json`.
+- [x] Create initial flash script.
+- [x] Create remote deploy/update script that reuses pi-base helpers.
 - [ ] Flash the Pi and verify:
   - [ ] SSH works
   - [ ] `mba-player.service` starts

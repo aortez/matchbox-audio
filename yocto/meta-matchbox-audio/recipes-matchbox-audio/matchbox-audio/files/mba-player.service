@@ -1,0 +1,16 @@
+[Unit]
+Description=Matchbox Audio player daemon
+After=data.mount network.target
+Wants=data.mount
+
+[Service]
+Type=simple
+User=matchbox
+Group=matchbox
+Environment=RUST_LOG=mba_player=info
+ExecStart=/usr/bin/mba-player --bind 0.0.0.0:8090
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
