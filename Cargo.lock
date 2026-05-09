@@ -670,6 +670,7 @@ dependencies = [
  "anyhow",
  "clap",
  "embedded-graphics",
+ "mba-protocol",
  "rppal",
  "tracing",
  "tracing-subscriber",

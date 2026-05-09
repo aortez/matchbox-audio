@@ -17,6 +17,7 @@ use embedded_graphics::{
     text::Text,
     Pixel,
 };
+use mba_protocol::NetworkMode;
 use rppal::{
     gpio::{Gpio, InputPin, Level, OutputPin},
     spi::{Bus, Mode, SlaveSelect, Spi},
@@ -30,10 +31,32 @@ const BUTTON_B_PIN: u8 = 6;
 const BUTTON_X_PIN: u8 = 16;
 const DEFAULT_Y_BUTTON_PINS: &[u8] = &[20, 24];
 const LONG_PRESS: Duration = Duration::from_millis(1200);
+const SHORT_PRESS_MIN: Duration = Duration::from_millis(80);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const DISPLAY_REFRESH: Duration = Duration::from_secs(2);
 const BUTTON_COOLDOWN: Duration = Duration::from_secs(2);
 const SPI_WRITE_CHUNK: usize = 4096;
+
+const DISPLAY_DC_PIN: u8 = 9;
+const DISPLAY_BACKLIGHT_PIN: u8 = 13;
+const DISPLAY_SPI_CLOCK_HZ: u32 = 62_500_000;
+
+// ST7789 controller commands used by the Pirate Audio display.
+const ST7789_SWRESET: u8 = 0x01;
+const ST7789_SLPOUT: u8 = 0x11;
+const ST7789_NORON: u8 = 0x13;
+const ST7789_INVON: u8 = 0x21;
+const ST7789_CASET: u8 = 0x2A;
+const ST7789_RASET: u8 = 0x2B;
+const ST7789_RAMWR: u8 = 0x2C;
+const ST7789_MADCTL: u8 = 0x36;
+const ST7789_COLMOD: u8 = 0x3A;
+const ST7789_DISPON: u8 = 0x29;
+
+// Pixel format = 16bpp RGB565.
+const ST7789_COLMOD_RGB565: u8 = 0x55;
+// Memory data access: row/column exchange + RGB order for the Pirate Audio panel.
+const ST7789_MADCTL_PIRATE: u8 = 0x70;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about = "Matchbox Audio device display and buttons")]
@@ -93,8 +116,9 @@ fn main() -> Result<()> {
         }
     };
 
-    let mut last_display = Instant::now() - DISPLAY_REFRESH;
-    let mut last_toggle = Instant::now() - BUTTON_COOLDOWN;
+    let mut frame = Framebuffer::new(Rgb565::BLACK);
+    let mut last_display = expired(DISPLAY_REFRESH);
+    let mut last_toggle = expired(BUTTON_COOLDOWN);
     let mut message = String::from("Hold Y for network");
 
     loop {
@@ -104,17 +128,24 @@ fn main() -> Result<()> {
                 match (event.action, event.kind) {
                     (ButtonAction::NetworkToggle, ButtonEventKind::ShortPress) => {
                         message = String::from("Hold Y to switch");
-                        last_display = Instant::now() - DISPLAY_REFRESH;
+                        last_display = expired(DISPLAY_REFRESH);
                     }
                     (ButtonAction::NetworkToggle, ButtonEventKind::LongPress) => {
                         if last_toggle.elapsed() >= BUTTON_COOLDOWN {
                             message = String::from("Switching network...");
-                            render_status(display.as_mut(), &args.network_script, &message);
+                            render_status(
+                                display.as_mut(),
+                                &mut frame,
+                                &args.network_script,
+                                &message,
+                            );
                             match run_network_toggle(&args.network_script) {
                                 Ok(output) => {
-                                    let mode = parse_field(&output, "mode").unwrap_or("changed");
+                                    let mode = NetworkMode::parse(
+                                        parse_field(&output, "mode").unwrap_or("unknown"),
+                                    );
                                     message = format!("Network: {mode}");
-                                    info!(mode, "network mode toggled");
+                                    info!(%mode, "network mode toggled");
                                 }
                                 Err(error) => {
                                     message = String::from("Network switch failed");
@@ -122,7 +153,7 @@ fn main() -> Result<()> {
                                 }
                             }
                             last_toggle = Instant::now();
-                            last_display = Instant::now() - DISPLAY_REFRESH;
+                            last_display = expired(DISPLAY_REFRESH);
                         }
                     }
                     (ButtonAction::LogOnly, _) => {}
@@ -131,12 +162,20 @@ fn main() -> Result<()> {
         }
 
         if last_display.elapsed() >= DISPLAY_REFRESH {
-            render_status(display.as_mut(), &args.network_script, &message);
+            render_status(display.as_mut(), &mut frame, &args.network_script, &message);
             last_display = Instant::now();
         }
 
         thread::sleep(POLL_INTERVAL);
     }
+}
+
+// Returns an Instant far enough in the past that elapsed() is at least `duration`,
+// without panicking on early boot when the monotonic clock is younger than `duration`.
+fn expired(duration: Duration) -> Instant {
+    Instant::now()
+        .checked_sub(duration)
+        .unwrap_or_else(Instant::now)
 }
 
 fn init_logging() {
@@ -148,7 +187,12 @@ fn init_logging() {
         .init();
 }
 
-fn render_status(display: Option<&mut PirateDisplay>, network_script: &str, message: &str) {
+fn render_status(
+    display: Option<&mut PirateDisplay>,
+    frame: &mut Framebuffer,
+    network_script: &str,
+    message: &str,
+) {
     let Some(display) = display else {
         return;
     };
@@ -158,7 +202,7 @@ fn render_status(display: Option<&mut PirateDisplay>, network_script: &str, mess
         Err(error) => {
             warn!(%error, "failed to read network status");
             NetworkStatus {
-                mode: String::from("unknown"),
+                mode: NetworkMode::Unknown,
                 active_connection: String::from("-"),
                 ip4: String::from("-"),
                 hotspot_ssid: String::from("matchbox-audio"),
@@ -167,10 +211,9 @@ fn render_status(display: Option<&mut PirateDisplay>, network_script: &str, mess
         }
     };
 
-    let mut frame = Framebuffer::new(Rgb565::BLACK);
-    draw_dashboard(&mut frame, &status, message);
+    draw_dashboard(frame, &status, message);
 
-    if let Err(error) = display.flush(&frame) {
+    if let Err(error) = display.flush(frame) {
         warn!(%error, "display refresh failed");
     }
 }
@@ -180,10 +223,9 @@ fn draw_dashboard(frame: &mut Framebuffer, status: &NetworkStatus, message: &str
     let label = MonoTextStyle::new(&FONT_6X10, Rgb565::new(16, 38, 22));
     let body = MonoTextStyle::new(&FONT_10X20, Rgb565::CYAN);
     let muted = MonoTextStyle::new(&FONT_6X10, Rgb565::new(18, 30, 18));
-    let accent = if status.mode == "car" {
-        Rgb565::YELLOW
-    } else {
-        Rgb565::GREEN
+    let accent = match status.mode {
+        NetworkMode::Car => Rgb565::YELLOW,
+        _ => Rgb565::GREEN,
     };
 
     let _ = Rectangle::new(Point::new(0, 0), Size::new(DISPLAY_WIDTH, DISPLAY_HEIGHT))
@@ -194,7 +236,7 @@ fn draw_dashboard(frame: &mut Framebuffer, status: &NetworkStatus, message: &str
         .draw(frame);
     let _ = Text::new("Matchbox Audio", Point::new(8, 22), title).draw(frame);
 
-    let mode = status.mode.to_uppercase();
+    let mode = status.mode.as_str().to_uppercase();
     let _ = Text::new("network", Point::new(8, 48), label).draw(frame);
     let _ = Text::new(
         &mode,
@@ -214,7 +256,7 @@ fn draw_dashboard(frame: &mut Framebuffer, status: &NetworkStatus, message: &str
     let _ = Text::new("address", Point::new(8, 144), label).draw(frame);
     let _ = Text::new(truncate(&status.ip4, 20), Point::new(8, 168), body).draw(frame);
 
-    if status.mode == "car" {
+    if status.mode == NetworkMode::Car {
         let _ = Text::new("hotspot", Point::new(8, 192), label).draw(frame);
         let _ = Text::new(
             truncate(&status.hotspot_ssid, 20),
@@ -246,7 +288,7 @@ fn truncate(value: &str, max_chars: usize) -> &str {
 
 #[derive(Debug)]
 struct NetworkStatus {
-    mode: String,
+    mode: NetworkMode,
     active_connection: String,
     ip4: String,
     hotspot_ssid: String,
@@ -256,9 +298,7 @@ struct NetworkStatus {
 fn network_status(network_script: &str) -> Result<NetworkStatus> {
     let output = run_network_command(network_script, "status")?;
     Ok(NetworkStatus {
-        mode: parse_field(&output, "mode")
-            .unwrap_or("unknown")
-            .to_string(),
+        mode: NetworkMode::parse(parse_field(&output, "mode").unwrap_or("unknown")),
         active_connection: parse_field(&output, "active_connection")
             .or_else(|| parse_field(&output, "ssid"))
             .unwrap_or("-")
@@ -434,7 +474,7 @@ impl ButtonState {
                     elapsed,
                 });
             }
-            if elapsed >= Duration::from_millis(80) {
+            if elapsed >= SHORT_PRESS_MIN {
                 return Some(ButtonEvent {
                     name: self.name,
                     gpio: self.number,
@@ -461,17 +501,24 @@ impl PirateDisplay {
     fn open() -> Result<Self> {
         let gpio = Gpio::new().context("failed to open GPIO")?;
         let dc = gpio
-            .get(9)
-            .context("failed to open GPIO 9 for display DC")?
+            .get(DISPLAY_DC_PIN)
+            .with_context(|| format!("failed to open GPIO {DISPLAY_DC_PIN} for display DC"))?
             .into_output();
         let mut backlight = gpio
-            .get(13)
-            .context("failed to open GPIO 13 for display backlight")?
+            .get(DISPLAY_BACKLIGHT_PIN)
+            .with_context(|| {
+                format!("failed to open GPIO {DISPLAY_BACKLIGHT_PIN} for display backlight")
+            })?
             .into_output();
         backlight.set_high();
 
-        let spi = Spi::new(Bus::Spi0, SlaveSelect::Ss1, 62_500_000, Mode::Mode0)
-            .context("failed to open SPI0 CE1 for Pirate Audio display")?;
+        let spi = Spi::new(
+            Bus::Spi0,
+            SlaveSelect::Ss1,
+            DISPLAY_SPI_CLOCK_HZ,
+            Mode::Mode0,
+        )
+        .context("failed to open SPI0 CE1 for Pirate Audio display")?;
 
         let mut display = Self { spi, dc, backlight };
         display.init()?;
@@ -479,31 +526,31 @@ impl PirateDisplay {
     }
 
     fn init(&mut self) -> Result<()> {
-        self.command(0x01)?;
+        self.command(ST7789_SWRESET)?;
         thread::sleep(Duration::from_millis(150));
-        self.command(0x11)?;
+        self.command(ST7789_SLPOUT)?;
         thread::sleep(Duration::from_millis(120));
-        self.command_data(0x3A, &[0x55])?;
-        self.command_data(0x36, &[0x70])?;
-        self.command(0x21)?;
-        self.command(0x13)?;
-        self.command(0x29)?;
+        self.command_data(ST7789_COLMOD, &[ST7789_COLMOD_RGB565])?;
+        self.command_data(ST7789_MADCTL, &[ST7789_MADCTL_PIRATE])?;
+        self.command(ST7789_INVON)?;
+        self.command(ST7789_NORON)?;
+        self.command(ST7789_DISPON)?;
         thread::sleep(Duration::from_millis(20));
         Ok(())
     }
 
-    fn flush(&mut self, frame: &Framebuffer) -> Result<()> {
+    fn flush(&mut self, frame: &mut Framebuffer) -> Result<()> {
         self.backlight.set_high();
         self.set_window(0, 0, DISPLAY_WIDTH as u16 - 1, DISPLAY_HEIGHT as u16 - 1)?;
-        self.command(0x2C)?;
+        self.command(ST7789_RAMWR)?;
         self.dc.set_high();
-        self.write_spi(&frame.as_bytes(), "failed to write display frame")?;
+        self.write_spi(frame.as_bytes(), "failed to write display frame")?;
         Ok(())
     }
 
     fn set_window(&mut self, x0: u16, y0: u16, x1: u16, y1: u16) -> Result<()> {
-        self.command_data(0x2A, &[hi(x0), lo(x0), hi(x1), lo(x1)])?;
-        self.command_data(0x2B, &[hi(y0), lo(y0), hi(y1), lo(y1)])?;
+        self.command_data(ST7789_CASET, &[hi(x0), lo(x0), hi(x1), lo(x1)])?;
+        self.command_data(ST7789_RASET, &[hi(y0), lo(y0), hi(y1), lo(y1)])?;
         Ok(())
     }
 
@@ -547,23 +594,26 @@ fn lo(value: u16) -> u8 {
 
 struct Framebuffer {
     pixels: Vec<Rgb565>,
+    bytes: Vec<u8>,
 }
 
 impl Framebuffer {
     fn new(color: Rgb565) -> Self {
+        let count = (DISPLAY_WIDTH * DISPLAY_HEIGHT) as usize;
         Self {
-            pixels: vec![color; (DISPLAY_WIDTH * DISPLAY_HEIGHT) as usize],
+            pixels: vec![color; count],
+            bytes: Vec::with_capacity(count * 2),
         }
     }
 
-    fn as_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(self.pixels.len() * 2);
+    fn as_bytes(&mut self) -> &[u8] {
+        self.bytes.clear();
         for pixel in &self.pixels {
             let raw = RawU16::from(*pixel).into_inner();
-            bytes.push((raw >> 8) as u8);
-            bytes.push(raw as u8);
+            self.bytes.push((raw >> 8) as u8);
+            self.bytes.push(raw as u8);
         }
-        bytes
+        &self.bytes
     }
 }
 

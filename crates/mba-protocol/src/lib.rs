@@ -66,9 +66,44 @@ pub struct BuildInfo {
     pub git_sha: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkMode {
+    Car,
+    Home,
+    Ethernet,
+    Unknown,
+}
+
+impl NetworkMode {
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "car" => Self::Car,
+            "home" => Self::Home,
+            "ethernet" => Self::Ethernet,
+            _ => Self::Unknown,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Car => "car",
+            Self::Home => "home",
+            Self::Ethernet => "ethernet",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+impl std::fmt::Display for NetworkMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetworkInfo {
-    pub mode: String,
+    pub mode: NetworkMode,
     pub active_connection: String,
     pub ssid: String,
     pub ip4: String,
@@ -96,7 +131,7 @@ mod tests {
     #[test]
     fn serializes_network_status() {
         let status = StatusResponse::ready("0.1.0", None::<String>).with_network(NetworkInfo {
-            mode: "car".to_string(),
+            mode: NetworkMode::Car,
             active_connection: "matchbox-car-hotspot".to_string(),
             ssid: "matchbox-audio".to_string(),
             ip4: "10.42.0.1".to_string(),
@@ -108,6 +143,15 @@ mod tests {
         assert_eq!(json["network"]["mode"], "car");
         assert_eq!(json["network"]["ip4"], "10.42.0.1");
         assert_eq!(json["network"]["hotspot_ssid"], "matchbox-audio");
+    }
+
+    #[test]
+    fn parses_unknown_network_mode() {
+        assert_eq!(NetworkMode::parse("car"), NetworkMode::Car);
+        assert_eq!(NetworkMode::parse("home"), NetworkMode::Home);
+        assert_eq!(NetworkMode::parse("ethernet"), NetworkMode::Ethernet);
+        assert_eq!(NetworkMode::parse(""), NetworkMode::Unknown);
+        assert_eq!(NetworkMode::parse("garbage"), NetworkMode::Unknown);
     }
 
     #[test]

@@ -150,16 +150,22 @@ function loadHotspotConfig(configPath) {
     return null;
   }
 
-  const parsed = JSON.parse(readFileSync(configPath, 'utf8'));
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(configPath, 'utf8'));
+  } catch (err) {
+    throw new Error(`${configPath} is not valid JSON: ${err.message}`);
+  }
+
   const hotspot = parsed.hotspot || {};
   const ssid = typeof hotspot.ssid === 'string' ? hotspot.ssid.trim() : '';
   const password = typeof hotspot.password === 'string' ? hotspot.password : '';
 
   if (!ssid) {
-    throw new Error('config/hotspot.local.json must set hotspot.ssid.');
+    throw new Error(`${configPath} must set hotspot.ssid.`);
   }
   if (password.length < 8) {
-    throw new Error('config/hotspot.local.json hotspot.password must be at least 8 characters.');
+    throw new Error(`${configPath} hotspot.password must be at least 8 characters.`);
   }
 
   return { ssid, password };
@@ -208,7 +214,7 @@ function injectHotspotConfig(device, config, dryRun = false) {
     execFileSync('sudo', ['mount', dataPartition, mountPoint], { stdio: 'pipe' });
     mounted = true;
     execFileSync('sudo', ['mkdir', '-p', join(mountPoint, 'matchbox-audio/network')], { stdio: 'pipe' });
-    execFileSync('sudo', ['install', '-m', '0644', envPath, join(mountPoint, 'matchbox-audio/network/hotspot.env')], { stdio: 'pipe' });
+    execFileSync('sudo', ['install', '-m', '0600', '-o', 'root', '-g', 'root', envPath, join(mountPoint, 'matchbox-audio/network/hotspot.env')], { stdio: 'pipe' });
     success('Hotspot config injected.');
   } catch (err) {
     pendingError = err;

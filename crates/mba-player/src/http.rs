@@ -1,7 +1,10 @@
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use axum::{extract::State, response::Html, routing::get, Json, Router};
-use mba_protocol::{NetworkInfo, StatusResponse};
+use mba_protocol::{NetworkInfo, NetworkMode, StatusResponse};
 use tokio::{process::Command, time::timeout};
 use tracing::warn;
 
@@ -43,10 +46,25 @@ async fn index(State(state): State<AppState>) -> Html<String> {
 </body>
 </html>
 "#,
-        state = state.status.service.state,
-        version = state.status.build.version,
-        network_mode = network_mode,
+        state = html_escape(&state.status.service.state.to_string()),
+        version = html_escape(&state.status.build.version),
+        network_mode = html_escape(network_mode),
     ))
+}
+
+fn html_escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#x27;"),
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
@@ -55,7 +73,7 @@ async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
     Json(status)
 }
 
-async fn read_network_status(network_script: &PathBuf) -> Option<NetworkInfo> {
+async fn read_network_status(network_script: &Path) -> Option<NetworkInfo> {
     let stdout = match run_network_status_command(network_script, false).await {
         Ok(stdout) => stdout,
         Err(error) => match run_network_status_command(network_script, true).await {
@@ -73,9 +91,7 @@ async fn read_network_status(network_script: &PathBuf) -> Option<NetworkInfo> {
     };
 
     Some(NetworkInfo {
-        mode: parse_field(&stdout, "mode")
-            .unwrap_or("unknown")
-            .to_string(),
+        mode: NetworkMode::parse(parse_field(&stdout, "mode").unwrap_or("unknown")),
         active_connection: parse_field(&stdout, "active_connection")
             .unwrap_or("none")
             .to_string(),
@@ -87,10 +103,7 @@ async fn read_network_status(network_script: &PathBuf) -> Option<NetworkInfo> {
     })
 }
 
-async fn run_network_status_command(
-    network_script: &PathBuf,
-    sudo: bool,
-) -> Result<String, String> {
+async fn run_network_status_command(network_script: &Path, sudo: bool) -> Result<String, String> {
     let mut command = if sudo {
         let mut command = Command::new("sudo");
         command.arg("-n").arg(network_script);

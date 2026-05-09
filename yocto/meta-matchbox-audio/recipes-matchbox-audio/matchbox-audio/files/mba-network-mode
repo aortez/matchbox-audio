@@ -38,13 +38,11 @@ ensure_hotspot_env() {
             echo "HOTSPOT_SSID=matchbox-audio"
             echo "HOTSPOT_PASSWORD=matchbox-$suffix"
         } > "$HOTSPOT_ENV"
-        chmod 644 "$HOTSPOT_ENV" 2>/dev/null || true
-    else
-        chmod 644 "$HOTSPOT_ENV" 2>/dev/null || true
     fi
+    chmod 600 "$HOTSPOT_ENV" 2>/dev/null || true
 
-    # shellcheck disable=SC1090
-    . "$HOTSPOT_ENV"
+    HOTSPOT_SSID="$(read_hotspot_field HOTSPOT_SSID)"
+    HOTSPOT_PASSWORD="$(read_hotspot_field HOTSPOT_PASSWORD)"
     : "${HOTSPOT_SSID:=matchbox-audio}"
     : "${HOTSPOT_PASSWORD:=matchbox-audio}"
 
@@ -52,6 +50,27 @@ ensure_hotspot_env() {
         echo "error: hotspot password must be at least 8 characters" >&2
         exit 1
     fi
+}
+
+# Read a single KEY=value line from $HOTSPOT_ENV without sourcing the file,
+# so that arbitrary shell content there cannot execute.
+read_hotspot_field() {
+    awk -v key="$1" -F= '
+        $1 == key {
+            sub(/^[^=]*=/, "")
+            if (length($0) >= 2) {
+                first = substr($0, 1, 1)
+                last  = substr($0, length($0), 1)
+                if (first == "\"" && last == "\"") {
+                    $0 = substr($0, 2, length($0) - 2)
+                } else if (first == "'\''" && last == "'\''") {
+                    $0 = substr($0, 2, length($0) - 2)
+                }
+            }
+            print
+            exit
+        }
+    ' "$HOTSPOT_ENV"
 }
 
 wifi_connections() {
