@@ -91,12 +91,7 @@ fn main() -> Result<()> {
     } else {
         args.fourth_button_gpios
     };
-    let button_specs = vec![
-        ButtonSpec::new("A", vec![BUTTON_A_PIN], ButtonAction::LogOnly),
-        ButtonSpec::new("B", vec![BUTTON_B_PIN], ButtonAction::LogOnly),
-        ButtonSpec::new("X", vec![BUTTON_X_PIN], ButtonAction::LogOnly),
-        ButtonSpec::new("Y", y_button_pins, ButtonAction::NetworkToggle),
-    ];
+    let button_specs = button_specs(y_button_pins);
     let button_summary = button_specs
         .iter()
         .map(|spec| format!("{}:{:?}", spec.name, spec.gpios))
@@ -126,8 +121,8 @@ fn main() -> Result<()> {
 
     let mut frame = Framebuffer::new(Rgb565::BLACK);
     let mut last_display = expired(DISPLAY_REFRESH);
-    let mut last_toggle = expired(BUTTON_COOLDOWN);
-    let mut message = String::from("Hold Y for network");
+    let mut last_network_toggle = expired(BUTTON_COOLDOWN);
+    let mut message = String::from("A play/pause | hold Y network");
     let player_client = match reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(3))
         .build()
@@ -149,7 +144,7 @@ fn main() -> Result<()> {
                         last_display = expired(DISPLAY_REFRESH);
                     }
                     (ButtonAction::NetworkToggle, ButtonEventKind::LongPress) => {
-                        if last_toggle.elapsed() >= BUTTON_COOLDOWN {
+                        if last_network_toggle.elapsed() >= BUTTON_COOLDOWN {
                             message = String::from("Switching network...");
                             render_status(
                                 display.as_mut(),
@@ -172,9 +167,39 @@ fn main() -> Result<()> {
                                     error!(%error, "network mode toggle failed");
                                 }
                             }
-                            last_toggle = Instant::now();
+                            last_network_toggle = Instant::now();
                             last_display = expired(DISPLAY_REFRESH);
                         }
+                    }
+                    (ButtonAction::Playback(command), _) => {
+                        message = String::from(command.progress_message());
+                        render_status(
+                            display.as_mut(),
+                            &mut frame,
+                            &args.network_script,
+                            player_client.as_ref(),
+                            &args.player_url,
+                            &message,
+                        );
+                        match run_playback_command(
+                            player_client.as_ref(),
+                            &args.player_url,
+                            command,
+                        ) {
+                            Ok(()) => {
+                                message = String::from(command.success_message());
+                                info!(command = command.endpoint(), "playback command sent");
+                            }
+                            Err(error) => {
+                                message = String::from("Playback command failed");
+                                error!(
+                                    %error,
+                                    command = command.endpoint(),
+                                    "playback command failed"
+                                );
+                            }
+                        }
+                        last_display = expired(DISPLAY_REFRESH);
                     }
                     (ButtonAction::LogOnly, _) => {}
                 }
@@ -195,6 +220,19 @@ fn main() -> Result<()> {
 
         thread::sleep(POLL_INTERVAL);
     }
+}
+
+fn button_specs(y_button_pins: Vec<u8>) -> Vec<ButtonSpec> {
+    vec![
+        ButtonSpec::new(
+            "A",
+            vec![BUTTON_A_PIN],
+            ButtonAction::Playback(PlaybackCommand::Toggle),
+        ),
+        ButtonSpec::new("B", vec![BUTTON_B_PIN], ButtonAction::LogOnly),
+        ButtonSpec::new("X", vec![BUTTON_X_PIN], ButtonAction::LogOnly),
+        ButtonSpec::new("Y", y_button_pins, ButtonAction::NetworkToggle),
+    ]
 }
 
 // Returns an Instant far enough in the past that elapsed() is at least `duration`,
@@ -475,6 +513,38 @@ fn run_network_toggle(network_script: &str) -> Result<String> {
     run_network_command(network_script, "toggle")
 }
 
+fn run_playback_command(
+    client: Option<&reqwest::blocking::Client>,
+    base_url: &str,
+    command: PlaybackCommand,
+) -> Result<()> {
+    let client = client.context("player HTTP client unavailable")?;
+    let url = playback_command_url(base_url, command);
+    let response = client
+        .post(&url)
+        .send()
+        .with_context(|| format!("failed to POST {url}"))?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
+    }
+
+    let body = response.text().unwrap_or_default();
+    bail!(
+        "playback {} failed ({status}): {}",
+        command.endpoint(),
+        body.trim()
+    );
+}
+
+fn playback_command_url(base_url: &str, command: PlaybackCommand) -> String {
+    format!(
+        "{}/api/v1/playback/{}",
+        base_url.trim_end_matches('/'),
+        command.endpoint()
+    )
+}
+
 fn run_network_command(network_script: &str, command: &str) -> Result<String> {
     let output = Command::new(network_script)
         .arg(command)
@@ -502,6 +572,32 @@ fn parse_field<'a>(output: &'a str, field: &str) -> Option<&'a str> {
 enum ButtonAction {
     LogOnly,
     NetworkToggle,
+    Playback(PlaybackCommand),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlaybackCommand {
+    Toggle,
+}
+
+impl PlaybackCommand {
+    fn endpoint(self) -> &'static str {
+        match self {
+            Self::Toggle => "toggle",
+        }
+    }
+
+    fn progress_message(self) -> &'static str {
+        match self {
+            Self::Toggle => "Play/pause...",
+        }
+    }
+
+    fn success_message(self) -> &'static str {
+        match self {
+            Self::Toggle => "Playback toggled",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -807,5 +903,32 @@ impl DrawTarget for Framebuffer {
     fn clear(&mut self, color: Self::Color) -> Result<(), Self::Error> {
         self.pixels.fill(color);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pirate_audio_a_button_toggles_playback() {
+        let specs = button_specs(vec![24]);
+
+        assert_eq!(specs[0].name, "A");
+        assert_eq!(specs[0].gpios, vec![BUTTON_A_PIN]);
+        assert_eq!(
+            specs[0].action,
+            ButtonAction::Playback(PlaybackCommand::Toggle)
+        );
+        assert_eq!(specs[3].name, "Y");
+        assert_eq!(specs[3].action, ButtonAction::NetworkToggle);
+    }
+
+    #[test]
+    fn playback_command_url_trims_base_slash() {
+        assert_eq!(
+            playback_command_url("http://127.0.0.1:8090/", PlaybackCommand::Toggle),
+            "http://127.0.0.1:8090/api/v1/playback/toggle"
+        );
     }
 }

@@ -243,6 +243,11 @@ landings so each step ends with a deployable, verified image.
   the hardening test to cover any new sudo/file-permission surface introduced
   in C–D.
 
+Landing E partial status: on May 9, 2026, the PIM483 A button was bound to the
+existing `POST /api/v1/playback/toggle` endpoint so it toggles play/pause
+through `mba-player` and MPD. Previous/next buttons and the broader web UI
+polish remain open.
+
 Landing C PIM483 display sketch:
 
 ```
@@ -409,7 +414,7 @@ support is deferred to Phase 4.
 - [x] Configure PIM483 ST7789 display.
 - [x] Configure PIM483 buttons.
 - [ ] Implement button handling:
-  - [ ] play/pause
+  - [x] play/pause
   - [ ] previous
   - [ ] next
   - [x] fourth button placeholder/configurable action
@@ -430,9 +435,11 @@ short press only prompts the hold action on the display. Remote verification on
 `matchbox-audio.local` confirms the service is active, SPI devices exist, and
 display refreshes no longer report write failures. Physical Y-button validation
 confirmed a long press switches `wlan0` from home Wi-Fi to the
-`matchbox-audio` hotspot in car mode. The play/pause, previous, and next
-buttons are intentionally still unbound until playback control exists; for now
-they emit short/long press logs so the physical buttons can be validated.
+`matchbox-audio` hotspot in car mode. After Landing C/D playback APIs landed,
+the A button was wired to `mba-player`'s playback toggle endpoint, so a press
+toggles play/pause for the current MPD queue. The previous and next buttons
+remain unbound; for now they emit short/long press logs so the physical buttons
+can be validated.
 
 ## Phase 8: Metadata and Artwork Cache
 
