@@ -84,9 +84,6 @@ async fn read_network_status(network_script: &PathBuf) -> Option<NetworkInfo> {
         hotspot_ssid: parse_field(&stdout, "hotspot_ssid")
             .unwrap_or("matchbox-audio")
             .to_string(),
-        hotspot_password: parse_field(&stdout, "hotspot_password")
-            .unwrap_or("-")
-            .to_string(),
     })
 }
 

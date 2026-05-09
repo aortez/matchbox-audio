@@ -53,7 +53,6 @@ async fn show_status(server: Url) -> Result<()> {
         println!("network_ssid: {}", network.ssid);
         println!("network_ip4: {}", network.ip4);
         println!("hotspot_ssid: {}", network.hotspot_ssid);
-        println!("hotspot_password: {}", network.hotspot_password);
     }
 
     Ok(())

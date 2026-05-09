@@ -73,7 +73,6 @@ pub struct NetworkInfo {
     pub ssid: String,
     pub ip4: String,
     pub hotspot_ssid: String,
-    pub hotspot_password: String,
 }
 
 #[cfg(test)]
@@ -102,7 +101,6 @@ mod tests {
             ssid: "matchbox-audio".to_string(),
             ip4: "10.42.0.1".to_string(),
             hotspot_ssid: "matchbox-audio".to_string(),
-            hotspot_password: "matchbox-eccf30e9".to_string(),
         });
 
         let json = serde_json::to_value(&status).expect("status serializes");

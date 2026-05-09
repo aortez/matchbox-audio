@@ -141,7 +141,7 @@ home mode.
   - [ ] `/data/matchbox-audio` writable by Matchbox app services
   - [ ] `/data/mpd` writable by MPD
   - [ ] hotspot/network state readable only as needed
-- [ ] Stop exposing hotspot password in unauthenticated status by default, or
+- [x] Stop exposing hotspot password in unauthenticated status by default, or
   gate it behind a local/admin-only path.
 - [ ] Add minimal systemd hardening for services where practical.
 - [ ] Verify remote deploy, `mba-cli status`, button network switching, MPD, and
