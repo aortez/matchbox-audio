@@ -83,6 +83,7 @@ function main() {
 
   check('SSH reachability', () => ssh(remoteTarget, 'echo reachable'));
   check('mba-player service', () => ssh(remoteTarget, 'systemctl is-active mba-player.service'));
+  check('mpd service', () => ssh(remoteTarget, 'systemctl is-active mpd.service'));
   check('mba-cli status', () => ssh(remoteTarget, 'mba-cli status'));
   check('/data mount', () => ssh(remoteTarget, "grep ' /data ' /proc/mounts"));
   check('A/B slot status', () => ssh(remoteTarget, 'ab-boot-manager status'));

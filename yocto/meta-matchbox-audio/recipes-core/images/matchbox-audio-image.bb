@@ -58,6 +58,14 @@ IMAGE_INSTALL:append = " \
     rsync \
 "
 
+# MPD plus the mpc CLI for on-device sanity checks. The Matchbox bbappend
+# overrides mpd.conf and the systemd unit; see
+# recipes-multimedia/musicpd/mpd_%.bbappend.
+IMAGE_INSTALL:append = " \
+    mpc \
+    mpd \
+"
+
 # BLE provisioning is deferred. Keep BlueZ from pi-base, but avoid pulling in
 # the provisioner daemon and Yocto's source-built Rust stack for Phase 1.
 IMAGE_INSTALL:remove = "wifi-provisioner"

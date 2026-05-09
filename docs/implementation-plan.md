@@ -175,12 +175,12 @@ lands.
 
 ## Phase 3: MPD on Target
 
-- [ ] Add MPD to the Yocto image.
-- [ ] Configure MPD to bind locally only.
-- [ ] Use `127.0.0.1:6600` initially.
+- [x] Add MPD to the Yocto image.
+- [x] Configure MPD to bind locally only.
+- [x] Use `127.0.0.1:6600` initially.
 - [ ] Keep Unix socket support as an optional later refinement.
-- [ ] Configure MPD music, database, playlist, and state paths under `/data`.
-- [ ] Add or configure `mpd.service`.
+- [x] Configure MPD music, database, playlist, and state paths under `/data`.
+- [x] Add or configure `mpd.service`.
 - [ ] Configure minimal PIM483 I2S line-out audio.
 - [ ] Keep ALSA/DAC output at fixed line level.
 - [ ] Configure MPD software volume with maximum and startup volume caps.
@@ -199,6 +199,45 @@ lands.
 - [ ] Add CLI support for playback commands.
 - [ ] Verify commands remotely with `mba-cli`.
 - [ ] Implement status polling or MPD idle/event integration.
+
+Phase 3 landing plan: the Phase 3 checklist is delivered as five incremental
+landings so each step ends with a deployable, verified image.
+
+- Landing A — MPD on target (no audio): package `mpd` and `mpc` from
+  meta-multimedia, bind MPD to `127.0.0.1:6600`, run as `mpd:mpd`, route
+  state under `/data/mpd`, harden the unit, and prove it on the device with
+  a `null` output. Done.
+- Landing B — PIM483 audio path: confirm the `hifiberry-dac` overlay is
+  active, set ALSA's default to the I2S card, replace MPD's `null` output
+  with an ALSA output to the DAC, enable software mixer with
+  `mixer_max_volume "80"` and startup `volume "40"`, sync a small test track
+  to `/data/music`, and verify clean playback through the PIM483 line-out.
+- Landing C — `mba-player` ↔ MPD IPC: pick or build a Rust MPD client, add
+  connection management to `mba-player`, expose play/pause/toggle/stop/next/
+  previous/seek/volume through the API and `mba-cli`, and surface MPD state
+  in `/api/v1/status`.
+- Landing D — Library and database refresh: decide the ingestion path for
+  `/data/music` (host-side `rsync` push vs. on-device tooling), wire MPD
+  `update`/`rescan` triggers from the API, expose a basic library listing,
+  and verify scans do not block playback control.
+- Landing E — End-to-end through the UI surface: drive real playback from
+  the PIM483 buttons and the placeholder web UI, regression-test the golden
+  path (boot → hotspot → enqueue → play → skip → volume), and extend the
+  hardening test to cover any new sudo/file-permission surface introduced
+  in C–D.
+
+Phase 3 Landing A status note: on May 9, 2026, the Yocto image gained the
+upstream `mpd` and `mpc` packages from `meta-multimedia` via a bbappend that
+ships a Matchbox `mpd.conf`, drops a hardened `mpd.service` drop-in, narrows
+PACKAGECONFIG to `alsa daemon flac mpg123 vorbis`, and removes the unused
+`mpd.socket`. MPD runs as `mpd:mpd`, binds `127.0.0.1:6600`, and stores its
+database, playlists, and state under `/data/mpd` (created by `mba-data-init`
+with `mpd:mpd 0750`). Audio output is a `null` sink for now; the PIM483 ALSA
+wiring lands in Landing B. The hardened image was A/B deployed to slot `b` on
+`matchbox-audio.local` and `npm run hardening` passed end-to-end, including
+new checks for the MPD service, bind address, ProtectSystem=strict, and
+`/data/mpd` ownership. `mpc status` and `mpc update` work over SSH; the
+running `matchbox` user can also `sudo systemctl restart mpd.service`.
 
 ## Phase 4: Filesystem Library Browsing and Queueing
 
