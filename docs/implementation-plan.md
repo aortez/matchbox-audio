@@ -184,10 +184,9 @@ lands.
 - [x] Configure minimal PIM483 I2S line-out audio.
 - [x] Keep ALSA/DAC output at fixed line level.
 - [x] Configure MPD software volume with startup volume cap.
-- [ ] Enforce user-facing maximum volume cap in `mba-player`.
 - [x] Verify MPD playback reaches the PIM483 ALSA output on the Pi.
 - [x] Verify clean analog line-out by listening through the PIM483 output.
-- [ ] Select Rust MPD client crate or implement minimal MPD protocol client.
+- [ ] Integrate the `mpd_client` crate in `mba-player`.
 - [ ] Implement `mba-player` MPD connection management.
 - [ ] Implement playback commands:
   - [ ] play
@@ -215,21 +214,48 @@ landings so each step ends with a deployable, verified image.
   volume to `40`, sync a small test track to `/data/music`, verify MPD playback
   through the PIM483 output, and confirm clean analog line-out by listening.
   MPD 0.23.14 does not provide a supported `mixer_max_volume` setting; the
-  user-facing maximum volume cap is enforced in Landing C when playback control
-  moves behind `mba-player`.
-- Landing C — `mba-player` ↔ MPD IPC: pick or build a Rust MPD client, add
-  connection management to `mba-player`, expose play/pause/toggle/stop/next/
-  previous/seek/volume through the API and `mba-cli`, and surface MPD state
-  in `/api/v1/status`.
+  device drives a line-out into an external amp, so the previously planned
+  user-facing volume cap was dropped rather than moved to `mba-player`.
+- Landing C — `mba-player` ↔ MPD IPC and basic UI: integrate the
+  `mpd_client` crate, run a command connection plus a long-lived `idle`
+  connection, cache `PlaybackState` so `GET /api/v1/status` is a memory read,
+  expose `play`/`pause`/`toggle`/`stop`/`next`/`previous`/`seek`/`volume`
+  through the API and `mba-cli` (volume validates `0..=100` with no cap —
+  the line-out has no equipment to protect), extend `/api/v1/status` with a
+  `playback {state, volume, track {uri, title, artist, album, duration_s,
+  elapsed_s} | null, queue_length}` subobject, and rework the PIM483 panel
+  from a single column into three horizontal bands (network, now-playing,
+  footer hint) so it doubles as a basic playback UI for hands-on use. The
+  intended layout is captured below the landing list.
 - Landing D — Library and database refresh: decide the ingestion path for
   `/data/music` (host-side `rsync` push vs. on-device tooling), wire MPD
   `update`/`rescan` triggers from the API, expose a basic library listing,
   and verify scans do not block playback control.
-- Landing E — End-to-end through the UI surface: drive real playback from
-  the PIM483 buttons and the placeholder web UI, regression-test the golden
-  path (boot → hotspot → enqueue → play → skip → volume), and extend the
-  hardening test to cover any new sudo/file-permission surface introduced
+- Landing E — End-to-end through the UI surface: bind the PIM483 play/pause/
+  previous/next buttons to the playback API, polish the placeholder web page
+  into a usable controller (status + queue + browse), regression-test the
+  golden path (boot → hotspot → enqueue → play → skip → volume), and extend
+  the hardening test to cover any new sudo/file-permission surface introduced
   in C–D.
+
+Landing C PIM483 display sketch:
+
+```
+┌─ Matchbox Audio ───────┐
+│ HOME · onionchan       │
+│ 192.168.1.102          │
+├────────────────────────┤
+│ ▶ Track Title          │
+│   Artist — Album       │
+│ 01:23 / 04:05    ♪ 65  │
+├────────────────────────┤
+│ Hold Y for network     │
+└────────────────────────┘
+```
+
+When no track is loaded the now-playing band shows `idle`. The footer hint
+remains the existing `Hold Y for network` action; later landings can rotate
+this slot for transient messages (scan progress, errors, etc.).
 
 Phase 3 Landing A status note: on May 9, 2026, the Yocto image gained the
 upstream `mpd` and `mpc` packages from `meta-multimedia` via a bbappend that
