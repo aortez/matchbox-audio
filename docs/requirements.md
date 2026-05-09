@@ -384,5 +384,4 @@ System services:
 ## Open Questions
 
 - What should the fourth hardware button do?
-- What is the implementation scope for later AirPlay or Bluetooth audio sink
-  support?
+- What is the implementation scope for later Bluetooth audio sink support?
