@@ -122,7 +122,7 @@ fn main() -> Result<()> {
     let mut frame = Framebuffer::new(Rgb565::BLACK);
     let mut last_display = expired(DISPLAY_REFRESH);
     let mut last_network_toggle = expired(BUTTON_COOLDOWN);
-    let mut message = String::from("A play/pause | hold Y network");
+    let mut message = String::from("A play | B prev | X next | hold Y");
     let player_client = match reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(3))
         .build()
@@ -201,7 +201,6 @@ fn main() -> Result<()> {
                         }
                         last_display = expired(DISPLAY_REFRESH);
                     }
-                    (ButtonAction::LogOnly, _) => {}
                 }
             }
         }
@@ -229,8 +228,16 @@ fn button_specs(y_button_pins: Vec<u8>) -> Vec<ButtonSpec> {
             vec![BUTTON_A_PIN],
             ButtonAction::Playback(PlaybackCommand::Toggle),
         ),
-        ButtonSpec::new("B", vec![BUTTON_B_PIN], ButtonAction::LogOnly),
-        ButtonSpec::new("X", vec![BUTTON_X_PIN], ButtonAction::LogOnly),
+        ButtonSpec::new(
+            "B",
+            vec![BUTTON_B_PIN],
+            ButtonAction::Playback(PlaybackCommand::Previous),
+        ),
+        ButtonSpec::new(
+            "X",
+            vec![BUTTON_X_PIN],
+            ButtonAction::Playback(PlaybackCommand::Next),
+        ),
         ButtonSpec::new("Y", y_button_pins, ButtonAction::NetworkToggle),
     ]
 }
@@ -570,7 +577,6 @@ fn parse_field<'a>(output: &'a str, field: &str) -> Option<&'a str> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ButtonAction {
-    LogOnly,
     NetworkToggle,
     Playback(PlaybackCommand),
 }
@@ -578,24 +584,32 @@ enum ButtonAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PlaybackCommand {
     Toggle,
+    Previous,
+    Next,
 }
 
 impl PlaybackCommand {
     fn endpoint(self) -> &'static str {
         match self {
             Self::Toggle => "toggle",
+            Self::Previous => "previous",
+            Self::Next => "next",
         }
     }
 
     fn progress_message(self) -> &'static str {
         match self {
             Self::Toggle => "Play/pause...",
+            Self::Previous => "Previous track...",
+            Self::Next => "Next track...",
         }
     }
 
     fn success_message(self) -> &'static str {
         match self {
             Self::Toggle => "Playback toggled",
+            Self::Previous => "Previous track",
+            Self::Next => "Next track",
         }
     }
 }
@@ -911,7 +925,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pirate_audio_a_button_toggles_playback() {
+    fn pirate_audio_buttons_map_to_transport_controls() {
         let specs = button_specs(vec![24]);
 
         assert_eq!(specs[0].name, "A");
@@ -920,15 +934,35 @@ mod tests {
             specs[0].action,
             ButtonAction::Playback(PlaybackCommand::Toggle)
         );
+        assert_eq!(specs[1].name, "B");
+        assert_eq!(specs[1].gpios, vec![BUTTON_B_PIN]);
+        assert_eq!(
+            specs[1].action,
+            ButtonAction::Playback(PlaybackCommand::Previous)
+        );
+        assert_eq!(specs[2].name, "X");
+        assert_eq!(specs[2].gpios, vec![BUTTON_X_PIN]);
+        assert_eq!(
+            specs[2].action,
+            ButtonAction::Playback(PlaybackCommand::Next)
+        );
         assert_eq!(specs[3].name, "Y");
         assert_eq!(specs[3].action, ButtonAction::NetworkToggle);
     }
 
     #[test]
-    fn playback_command_url_trims_base_slash() {
+    fn playback_command_urls_trim_base_slash() {
         assert_eq!(
             playback_command_url("http://127.0.0.1:8090/", PlaybackCommand::Toggle),
             "http://127.0.0.1:8090/api/v1/playback/toggle"
+        );
+        assert_eq!(
+            playback_command_url("http://127.0.0.1:8090/", PlaybackCommand::Previous),
+            "http://127.0.0.1:8090/api/v1/playback/previous"
+        );
+        assert_eq!(
+            playback_command_url("http://127.0.0.1:8090/", PlaybackCommand::Next),
+            "http://127.0.0.1:8090/api/v1/playback/next"
         );
     }
 }
