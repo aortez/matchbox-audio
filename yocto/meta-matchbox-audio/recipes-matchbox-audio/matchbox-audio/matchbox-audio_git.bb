@@ -22,7 +22,22 @@ do_compile[network] = "1"
 
 python () {
     srcroot = d.getVar("MATCHBOX_AUDIO_SRCROOT")
-    d.appendVarFlag("do_compile", "file-checksums", f" {srcroot}/Cargo.toml:True {srcroot}/Cargo.lock:True")
+    compile_checksums = [f"{srcroot}/Cargo.toml:True", f"{srcroot}/Cargo.lock:True"]
+    # Track per-crate Cargo.toml plus every .rs source so edits invalidate the
+    # cache without needing a manifest bump.
+    crates_dir = os.path.join(srcroot, "crates")
+    if os.path.isdir(crates_dir):
+        for crate in sorted(os.listdir(crates_dir)):
+            crate_toml = os.path.join(crates_dir, crate, "Cargo.toml")
+            if os.path.isfile(crate_toml):
+                compile_checksums.append(f"{crate_toml}:True")
+            crate_src = os.path.join(crates_dir, crate, "src")
+            if os.path.isdir(crate_src):
+                for root, _, files in os.walk(crate_src):
+                    for name in sorted(files):
+                        if name.endswith(".rs"):
+                            compile_checksums.append(f"{os.path.join(root, name)}:True")
+    d.appendVarFlag("do_compile", "file-checksums", " " + " ".join(compile_checksums))
     d.appendVarFlag(
         "do_install",
         "file-checksums",

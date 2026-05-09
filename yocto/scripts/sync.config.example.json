@@ -1,0 +1,5 @@
+{
+  "source": "/path/to/your/music/library",
+  "host": "matchbox-audio.local",
+  "user": "matchbox"
+}

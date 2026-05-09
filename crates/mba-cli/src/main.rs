@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
-use mba_protocol::StatusResponse;
+use mba_protocol::{LibraryListing, RescanResponse, StatusResponse};
 use reqwest::{Client, Method, Url};
 
 #[derive(Debug, Parser)]
@@ -41,6 +41,14 @@ enum Command {
         /// Volume level between 0 and 100.
         level: i32,
     },
+    /// List a folder in the music library.
+    Library {
+        /// Library path relative to the music root. Empty for the root.
+        #[arg(default_value = "")]
+        path: String,
+    },
+    /// Trigger an MPD library rescan.
+    Rescan,
 }
 
 #[tokio::main]
@@ -80,6 +88,8 @@ async fn main() -> Result<()> {
             )
             .await
         }
+        Command::Library { path } => list_library(&client, cli.server, path).await,
+        Command::Rescan => trigger_rescan(&client, cli.server).await,
     }
 }
 
@@ -163,6 +173,76 @@ async fn post_action(
         "playback {action} failed ({status}): {body}",
         body = body_text.trim()
     ))
+}
+
+async fn list_library(client: &Client, server: Url, path: String) -> Result<()> {
+    let mut url = api_url(server, "/api/v1/library");
+    if !path.is_empty() {
+        url.query_pairs_mut().append_pair("path", &path);
+    }
+    let listing = client
+        .get(url.clone())
+        .send()
+        .await
+        .with_context(|| format!("failed to connect to {url}"))?
+        .error_for_status()
+        .with_context(|| format!("library request failed for {url}"))?
+        .json::<LibraryListing>()
+        .await
+        .with_context(|| format!("failed to decode library response from {url}"))?;
+
+    println!("path: {}", listing.path);
+    if listing.directories.is_empty() && listing.tracks.is_empty() {
+        println!("(empty)");
+        return Ok(());
+    }
+    for dir in &listing.directories {
+        println!("dir: {}", dir.name);
+    }
+    for track in &listing.tracks {
+        let title = track.title.as_deref().unwrap_or(&track.name);
+        match (track.artist.as_deref(), track.duration_s) {
+            (Some(artist), Some(seconds)) => {
+                println!("track: {title} — {artist} [{}]", format_seconds(seconds))
+            }
+            (Some(artist), None) => println!("track: {title} — {artist}"),
+            (None, Some(seconds)) => {
+                println!("track: {title} [{}]", format_seconds(seconds))
+            }
+            (None, None) => println!("track: {title}"),
+        }
+    }
+    Ok(())
+}
+
+async fn trigger_rescan(client: &Client, server: Url) -> Result<()> {
+    let url = api_url(server, "/api/v1/library/rescan");
+    let response = client
+        .post(url.clone())
+        .send()
+        .await
+        .with_context(|| format!("failed to connect to {url}"))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body_text = response.text().await.unwrap_or_default();
+        return Err(anyhow!(
+            "rescan failed ({status}): {body}",
+            body = body_text.trim()
+        ));
+    }
+    let payload = response
+        .json::<RescanResponse>()
+        .await
+        .with_context(|| format!("failed to decode rescan response from {url}"))?;
+    println!("scan started: job {}", payload.job_id);
+    Ok(())
+}
+
+fn format_seconds(seconds: u32) -> String {
+    let minutes = seconds / 60;
+    let remainder = seconds % 60;
+    format!("{minutes}:{remainder:02}")
 }
 
 fn api_url(mut server: Url, path: &str) -> Url {

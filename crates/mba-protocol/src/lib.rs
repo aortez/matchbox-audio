@@ -166,6 +166,42 @@ pub struct TrackInfo {
     pub elapsed_s: Option<u32>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LibraryListing {
+    pub path: String,
+    pub directories: Vec<LibraryDirectory>,
+    pub tracks: Vec<LibraryTrack>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LibraryDirectory {
+    pub path: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LibraryTrack {
+    pub uri: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artist: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_s: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RescanResponse {
+    pub job_id: u64,
+}
+
+pub fn basename(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,6 +297,46 @@ mod tests {
         assert_eq!(json["playback"]["state"], "stop");
         assert_eq!(json["playback"]["volume"], 40);
         assert!(json["playback"].get("track").is_none());
+    }
+
+    #[test]
+    fn serializes_library_listing() {
+        let listing = LibraryListing {
+            path: "Pink Floyd".to_string(),
+            directories: vec![LibraryDirectory {
+                path: "Pink Floyd/Dark Side".to_string(),
+                name: "Dark Side".to_string(),
+            }],
+            tracks: vec![LibraryTrack {
+                uri: "Pink Floyd/single.flac".to_string(),
+                name: "single.flac".to_string(),
+                title: Some("Single".to_string()),
+                artist: Some("Pink Floyd".to_string()),
+                album: None,
+                duration_s: Some(214),
+            }],
+        };
+
+        let json = serde_json::to_value(&listing).expect("listing serializes");
+        assert_eq!(json["path"], "Pink Floyd");
+        assert_eq!(json["directories"][0]["name"], "Dark Side");
+        assert_eq!(json["tracks"][0]["title"], "Single");
+        assert!(json["tracks"][0].get("album").is_none());
+    }
+
+    #[test]
+    fn round_trips_rescan_response() {
+        let response = RescanResponse { job_id: 42 };
+        let json = serde_json::to_string(&response).expect("rescan serializes");
+        let decoded: RescanResponse = serde_json::from_str(&json).expect("rescan deserializes");
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn basename_strips_path() {
+        assert_eq!(basename("Pink Floyd/Dark Side/01 Speak to Me.flac"), "01 Speak to Me.flac");
+        assert_eq!(basename("Pink Floyd"), "Pink Floyd");
+        assert_eq!(basename(""), "");
     }
 
     #[test]

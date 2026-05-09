@@ -227,10 +227,15 @@ landings so each step ends with a deployable, verified image.
   from a single column into three horizontal bands (network, now-playing,
   footer hint) so it doubles as a basic playback UI for hands-on use. The
   intended layout is captured below the landing list.
-- Landing D — Library and database refresh: decide the ingestion path for
-  `/data/music` (host-side `rsync` push vs. on-device tooling), wire MPD
-  `update`/`rescan` triggers from the API, expose a basic library listing,
-  and verify scans do not block playback control.
+- Landing D — Library and database refresh: ingestion is host-side `rsync`
+  push driven by `npm run music-sync`, which reads
+  `~/.config/matchbox-audio/sync.json` (source/host/user defaults) and pushes
+  to `/data/music/` over SSH; the script then triggers an MPD update via
+  `POST /api/v1/library/rescan`. The API also exposes
+  `GET /api/v1/library?path=...` for single-level folder browsing
+  (matches MPD's `lsinfo`), and `mba-cli` gains `rescan` and `library [path]`
+  subcommands. Scans run server-side in MPD so the actor task is not blocked,
+  keeping playback commands responsive during a refresh.
 - Landing E — End-to-end through the UI surface: bind the PIM483 play/pause/
   previous/next buttons to the playback API, polish the placeholder web page
   into a usable controller (status + queue + browse), regression-test the
@@ -319,6 +324,32 @@ sets MPD volume). End-to-end verification drove an MPD queue with the
 Landing B test tone through `mba-cli play`, `toggle`, `next`, `seek`,
 `volume`, and `stop`; each command was reflected in `mpc status` and
 audible through the headphone line-out, and MPD volume was left at 80.
+
+Phase 3 Landing D status note: on May 9, 2026, `mba-player` gained library
+endpoints. `POST /api/v1/library/rescan` triggers MPD's `update` and returns
+`{job_id}` immediately so the actor stays responsive while MPD scans
+server-side. `GET /api/v1/library?path=...` calls MPD `lsinfo` and returns
+single-level folders + tracks (`{path, directories: [{name, path}], tracks:
+[{uri, name, title?, artist?, album?, duration_s?}]}`) — recursive walks are
+deferred to the Phase 4 browse work. `mba-cli` exposes `rescan` and
+`library [path]`. Host-side ingestion is `npm run music-sync`, a Node script
+that reads `~/.config/matchbox-audio/sync.json` (with `--source/--host/--user/
+--port/--dry-run/--no-delete` overrides), runs
+`rsync -av --delete --exclude=.DS_Store ...` to `matchbox@<host>:/data/music/`,
+then POSTs to `/api/v1/library/rescan`. An example config lives at
+`yocto/scripts/sync.config.example.json`. The matchbox-audio recipe was
+updated so `do_compile[file-checksums]` covers every per-crate `Cargo.toml`
+plus all `crates/*/src/**.rs` — without that, source-only edits don't
+invalidate the cache and the image keeps shipping the old binary. The
+hardened image was A/B deployed to slot `b` on `matchbox-audio.local`;
+`npm run smoke` passed including the new `rescan` and `library` checks. End-
+to-end verification synced `~/Music/A` (~84 MB), confirmed the listing showed
+`Air/` at root and `Ari - Moon Safari ... .ogg` inside it, and started
+playback then triggered `mba-cli rescan` mid-track — the actor returned the
+job id immediately and `mpc pause` still responded promptly with the track
+holding at 0:03. The single `.opus` file at the root did not appear in
+listings because MPD was built without the opus decoder; broader codec
+support is deferred to Phase 4.
 
 ## Phase 4: Filesystem Library Browsing and Queueing
 

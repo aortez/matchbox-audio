@@ -1,9 +1,13 @@
 use std::{net::SocketAddr, time::Duration};
 
-use mba_protocol::{PlaybackInfo, PlaybackState, TrackInfo};
+use mba_protocol::{
+    basename, LibraryDirectory, LibraryListing, LibraryTrack, PlaybackInfo, PlaybackState,
+    TrackInfo,
+};
 use mpd_client::{
     client::{ConnectionEvent, ConnectionEvents, Subsystem},
     commands,
+    protocol::command::Command as RawCommand,
     responses::{PlayState, SongInQueue, Status},
     Client,
 };
@@ -52,9 +56,34 @@ enum Action {
 }
 
 #[derive(Debug)]
-struct Request {
-    action: Action,
-    reply: oneshot::Sender<Result<(), MpdError>>,
+enum Request {
+    Action {
+        action: Action,
+        reply: oneshot::Sender<Result<(), MpdError>>,
+    },
+    Rescan {
+        reply: oneshot::Sender<Result<u64, MpdError>>,
+    },
+    ListLibrary {
+        path: String,
+        reply: oneshot::Sender<Result<LibraryListing, MpdError>>,
+    },
+}
+
+impl Request {
+    fn reject(self, error: MpdError) {
+        match self {
+            Request::Action { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Request::Rescan { reply } => {
+                let _ = reply.send(Err(error));
+            }
+            Request::ListLibrary { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -69,41 +98,59 @@ impl MpdHandle {
     }
 
     pub async fn play(&self) -> Result<(), MpdError> {
-        self.send(Action::Play).await
+        self.send_action(Action::Play).await
     }
 
     pub async fn pause(&self) -> Result<(), MpdError> {
-        self.send(Action::Pause).await
+        self.send_action(Action::Pause).await
     }
 
     pub async fn toggle(&self) -> Result<(), MpdError> {
-        self.send(Action::Toggle).await
+        self.send_action(Action::Toggle).await
     }
 
     pub async fn stop(&self) -> Result<(), MpdError> {
-        self.send(Action::Stop).await
+        self.send_action(Action::Stop).await
     }
 
     pub async fn next(&self) -> Result<(), MpdError> {
-        self.send(Action::Next).await
+        self.send_action(Action::Next).await
     }
 
     pub async fn previous(&self) -> Result<(), MpdError> {
-        self.send(Action::Previous).await
+        self.send_action(Action::Previous).await
     }
 
     pub async fn seek(&self, seconds: f64) -> Result<(), MpdError> {
-        self.send(Action::Seek { seconds }).await
+        self.send_action(Action::Seek { seconds }).await
     }
 
     pub async fn set_volume(&self, level: u8) -> Result<(), MpdError> {
-        self.send(Action::SetVolume { level }).await
+        self.send_action(Action::SetVolume { level }).await
     }
 
-    async fn send(&self, action: Action) -> Result<(), MpdError> {
+    pub async fn rescan(&self) -> Result<u64, MpdError> {
         let (tx, rx) = oneshot::channel();
         self.commands
-            .send(Request { action, reply: tx })
+            .send(Request::Rescan { reply: tx })
+            .await
+            .map_err(|_| MpdError::ChannelClosed)?;
+        rx.await.map_err(|_| MpdError::ChannelClosed)?
+    }
+
+    pub async fn list_library(&self, path: String) -> Result<LibraryListing, MpdError> {
+        let (tx, rx) = oneshot::channel();
+        self.commands
+            .send(Request::ListLibrary { path, reply: tx })
+            .await
+            .map_err(|_| MpdError::ChannelClosed)?;
+        rx.await.map_err(|_| MpdError::ChannelClosed)?
+    }
+
+    async fn send_action(&self, action: Action) -> Result<(), MpdError> {
+        let (tx, rx) = oneshot::channel();
+        self.commands
+            .send(Request::Action { action, reply: tx })
             .await
             .map_err(|_| MpdError::ChannelClosed)?;
         rx.await.map_err(|_| MpdError::ChannelClosed)?
@@ -171,9 +218,7 @@ async fn drain_during_backoff(commands: &mut mpsc::Receiver<Request>, backoff: D
             _ = &mut timer => return true,
             req = commands.recv() => {
                 match req {
-                    Some(req) => {
-                        let _ = req.reply.send(Err(MpdError::Unavailable));
-                    }
+                    Some(req) => req.reject(MpdError::Unavailable),
                     None => return false,
                 }
             }
@@ -196,8 +241,8 @@ async fn session_loop(
         select! {
             request = commands.recv() => {
                 match request {
-                    Some(req) => {
-                        if !handle_request(client, req).await {
+                    Some(request) => {
+                        if !handle_request(client, request).await {
                             return SessionEnd::Disconnected;
                         }
                     }
@@ -234,7 +279,18 @@ async fn connect(addr: SocketAddr) -> Result<(Client, ConnectionEvents), String>
 }
 
 async fn handle_request(client: &Client, request: Request) -> bool {
-    let Request { action, reply } = request;
+    match request {
+        Request::Action { action, reply } => handle_action(client, action, reply).await,
+        Request::Rescan { reply } => handle_rescan(client, reply).await,
+        Request::ListLibrary { path, reply } => handle_list_library(client, path, reply).await,
+    }
+}
+
+async fn handle_action(
+    client: &Client,
+    action: Action,
+    reply: oneshot::Sender<Result<(), MpdError>>,
+) -> bool {
     let outcome = match action {
         Action::Play => client
             .command(commands::Play::current())
@@ -294,6 +350,48 @@ async fn handle_request(client: &Client, request: Request) -> bool {
     true
 }
 
+async fn handle_rescan(client: &Client, reply: oneshot::Sender<Result<u64, MpdError>>) -> bool {
+    match client.command(commands::Update::new()).await {
+        Ok(job_id) => {
+            let _ = reply.send(Ok(job_id));
+        }
+        Err(error) => {
+            let message = error.to_string();
+            warn!(%message, "MPD update failed");
+            let _ = reply.send(Err(MpdError::Command(message)));
+        }
+    }
+    true
+}
+
+async fn handle_list_library(
+    client: &Client,
+    path: String,
+    reply: oneshot::Sender<Result<LibraryListing, MpdError>>,
+) -> bool {
+    let mut command = RawCommand::new("lsinfo");
+    if !path.is_empty() {
+        if let Err(error) = command.add_argument::<&str>(path.as_str()) {
+            let message = error.to_string();
+            warn!(%message, "lsinfo argument rejected");
+            let _ = reply.send(Err(MpdError::Command(message)));
+            return true;
+        }
+    }
+    match client.raw_command(command).await {
+        Ok(frame) => {
+            let listing = parse_listing(path, frame.fields());
+            let _ = reply.send(Ok(listing));
+        }
+        Err(error) => {
+            let message = error.to_string();
+            warn!(%message, "MPD lsinfo failed");
+            let _ = reply.send(Err(MpdError::Command(message)));
+        }
+    }
+    true
+}
+
 fn subsystem_affects_playback(subsystem: &Subsystem) -> bool {
     matches!(
         subsystem,
@@ -346,5 +444,166 @@ fn playback_from(status: Status, current: Option<SongInQueue>) -> PlaybackInfo {
         volume: status.volume,
         queue_length: status.playlist_length as u32,
         track,
+    }
+}
+
+struct PendingTrack {
+    uri: String,
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    duration_s: Option<u32>,
+}
+
+impl PendingTrack {
+    fn new(uri: String) -> Self {
+        Self {
+            uri,
+            title: None,
+            artist: None,
+            album: None,
+            duration_s: None,
+        }
+    }
+
+    fn into_track(self) -> LibraryTrack {
+        LibraryTrack {
+            name: basename(&self.uri).to_string(),
+            uri: self.uri,
+            title: self.title,
+            artist: self.artist,
+            album: self.album,
+            duration_s: self.duration_s,
+        }
+    }
+}
+
+fn parse_listing<'a, I>(path: String, fields: I) -> LibraryListing
+where
+    I: IntoIterator<Item = (&'a str, &'a str)>,
+{
+    let mut directories = Vec::new();
+    let mut tracks = Vec::new();
+    let mut pending: Option<PendingTrack> = None;
+    let mut in_playlist = false;
+
+    for (key, value) in fields {
+        match key {
+            "directory" => {
+                if let Some(track) = pending.take() {
+                    tracks.push(track.into_track());
+                }
+                in_playlist = false;
+                directories.push(LibraryDirectory {
+                    name: basename(value).to_string(),
+                    path: value.to_string(),
+                });
+            }
+            "file" => {
+                if let Some(track) = pending.take() {
+                    tracks.push(track.into_track());
+                }
+                in_playlist = false;
+                pending = Some(PendingTrack::new(value.to_string()));
+            }
+            "playlist" => {
+                if let Some(track) = pending.take() {
+                    tracks.push(track.into_track());
+                }
+                in_playlist = true;
+            }
+            "Title" => {
+                if let Some(track) = pending.as_mut() {
+                    track.title = Some(value.to_string());
+                }
+            }
+            "Artist" => {
+                if let Some(track) = pending.as_mut() {
+                    track.artist = Some(value.to_string());
+                }
+            }
+            "Album" => {
+                if let Some(track) = pending.as_mut() {
+                    track.album = Some(value.to_string());
+                }
+            }
+            "Time" | "duration" => {
+                if let Some(track) = pending.as_mut() {
+                    if let Ok(secs) = value.parse::<f64>() {
+                        track.duration_s = Some(secs.round().max(0.0) as u32);
+                    }
+                }
+            }
+            _ => {
+                let _ = in_playlist;
+            }
+        }
+    }
+    if let Some(track) = pending.take() {
+        tracks.push(track.into_track());
+    }
+
+    LibraryListing {
+        path,
+        directories,
+        tracks,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_listing_empty_returns_empty_listing() {
+        let listing = parse_listing(String::new(), [].iter().copied());
+        assert_eq!(listing.path, "");
+        assert!(listing.directories.is_empty());
+        assert!(listing.tracks.is_empty());
+    }
+
+    #[test]
+    fn parse_listing_groups_directories_and_files() {
+        let fields: &[(&str, &str)] = &[
+            ("directory", "Pink Floyd"),
+            ("Last-Modified", "2024-01-01T00:00:00Z"),
+            ("directory", "Radiohead"),
+            ("Last-Modified", "2024-01-02T00:00:00Z"),
+            ("file", "single.flac"),
+            ("Title", "Single"),
+            ("Artist", "Various"),
+            ("Album", "Mixtape"),
+            ("Time", "214"),
+            ("duration", "213.876"),
+            ("playlist", "legacy.m3u"),
+            ("Last-Modified", "2024-02-01T00:00:00Z"),
+        ];
+        let listing = parse_listing(String::new(), fields.iter().copied());
+
+        assert_eq!(listing.directories.len(), 2);
+        assert_eq!(listing.directories[0].name, "Pink Floyd");
+        assert_eq!(listing.directories[0].path, "Pink Floyd");
+        assert_eq!(listing.directories[1].name, "Radiohead");
+
+        assert_eq!(listing.tracks.len(), 1);
+        let track = &listing.tracks[0];
+        assert_eq!(track.uri, "single.flac");
+        assert_eq!(track.name, "single.flac");
+        assert_eq!(track.title.as_deref(), Some("Single"));
+        assert_eq!(track.artist.as_deref(), Some("Various"));
+        assert_eq!(track.album.as_deref(), Some("Mixtape"));
+        assert_eq!(track.duration_s, Some(214));
+    }
+
+    #[test]
+    fn parse_listing_uses_basename_for_nested_files() {
+        let fields: &[(&str, &str)] = &[
+            ("file", "Pink Floyd/Dark Side/01 Speak to Me.flac"),
+            ("Title", "Speak to Me"),
+        ];
+        let listing = parse_listing("Pink Floyd/Dark Side".to_string(), fields.iter().copied());
+        let track = &listing.tracks[0];
+        assert_eq!(track.uri, "Pink Floyd/Dark Side/01 Speak to Me.flac");
+        assert_eq!(track.name, "01 Speak to Me.flac");
     }
 }

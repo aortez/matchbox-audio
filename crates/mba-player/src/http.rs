@@ -4,13 +4,13 @@ use std::{
 };
 
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
     response::{Html, IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
-use mba_protocol::{NetworkInfo, NetworkMode, StatusResponse};
+use mba_protocol::{LibraryListing, NetworkInfo, NetworkMode, RescanResponse, StatusResponse};
 use serde::Deserialize;
 use tokio::{process::Command, time::timeout};
 use tracing::warn;
@@ -36,6 +36,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/playback/previous", post(previous))
         .route("/api/v1/playback/seek", post(seek))
         .route("/api/v1/playback/volume", post(volume))
+        .route("/api/v1/library", get(library))
+        .route("/api/v1/library/rescan", post(rescan))
         .with_state(state)
 }
 
@@ -253,6 +255,25 @@ async fn volume(
     }
     state.mpd.set_volume(req.level as u8).await?;
     Ok(StatusCode::ACCEPTED)
+}
+
+#[derive(Debug, Deserialize)]
+struct LibraryQuery {
+    #[serde(default)]
+    path: String,
+}
+
+async fn library(
+    State(state): State<AppState>,
+    Query(query): Query<LibraryQuery>,
+) -> Result<Json<LibraryListing>, ApiError> {
+    let listing = state.mpd.list_library(query.path).await?;
+    Ok(Json(listing))
+}
+
+async fn rescan(State(state): State<AppState>) -> Result<Json<RescanResponse>, ApiError> {
+    let job_id = state.mpd.rescan().await?;
+    Ok(Json(RescanResponse { job_id }))
 }
 
 #[derive(Debug)]
