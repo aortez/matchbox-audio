@@ -29,16 +29,22 @@ do_install() {
     install -d ${D}${bindir}
     install -m 0755 ${CARGO_BINDIR}/mba-player ${D}${bindir}/mba-player
     install -m 0755 ${CARGO_BINDIR}/mba-cli ${D}${bindir}/mba-cli
+    install -m 0755 ${CARGO_BINDIR}/mba-device ${D}${bindir}/mba-device
+    install -m 0755 ${THISDIR}/files/mba-network-mode ${D}${bindir}/mba-network-mode
 
     install -d ${D}${systemd_system_unitdir}
     install -m 0644 ${THISDIR}/files/mba-player.service ${D}${systemd_system_unitdir}/mba-player.service
+    install -m 0644 ${THISDIR}/files/mba-device.service ${D}${systemd_system_unitdir}/mba-device.service
 }
 
-SYSTEMD_SERVICE:${PN} = "mba-player.service"
+SYSTEMD_SERVICE:${PN} = "mba-player.service mba-device.service"
 SYSTEMD_AUTO_ENABLE = "enable"
 
 FILES:${PN} = " \
     ${bindir}/mba-player \
     ${bindir}/mba-cli \
+    ${bindir}/mba-device \
+    ${bindir}/mba-network-mode \
     ${systemd_system_unitdir}/mba-player.service \
+    ${systemd_system_unitdir}/mba-device.service \
 "

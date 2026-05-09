@@ -42,6 +42,13 @@ EOF
 }
 ROOTFS_POSTPROCESS_COMMAND:append = " setup_matchbox_sshd_policy;"
 
+setup_matchbox_network_policy() {
+    install -d -m 755 ${IMAGE_ROOTFS}/etc/systemd/system
+    rm -f ${IMAGE_ROOTFS}/etc/systemd/system/multi-user.target.wants/dnsmasq.service
+    ln -snf /dev/null ${IMAGE_ROOTFS}/etc/systemd/system/dnsmasq.service
+}
+ROOTFS_POSTPROCESS_COMMAND:append = " setup_matchbox_network_policy;"
+
 # Pi Zero 2 W Wi-Fi firmware and NetworkManager Wi-Fi support for the initial
 # home-network remote development loop.
 IMAGE_INSTALL:append = " \

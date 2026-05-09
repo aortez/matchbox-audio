@@ -67,6 +67,10 @@ running rootfs was not the mounted boot partition. Follow-up fix: add a
 Matchbox-specific `base-files` fstab override so future images mount
 `/dev/mmcblk0p1` at `/boot`, matching the dirtsim update pattern.
 
+Follow-up status: the `/boot` fstab override is implemented and verified by
+remote A/B updates on `matchbox-audio.local`. The update flow also ensures the
+Pirate Audio boot config lines are present before rebooting into a new rootfs.
+
 ## Phase 2: Hotspot and Target Networking
 
 - [ ] Define mutually exclusive network modes:
@@ -164,13 +168,13 @@ Matchbox-specific `base-files` fstab override so future images mount
 
 ## Phase 7: Pirate Audio Display and Button Bring-Up
 
-- [ ] Configure PIM483 ST7789 display.
-- [ ] Configure PIM483 buttons.
+- [x] Configure PIM483 ST7789 display.
+- [x] Configure PIM483 buttons.
 - [ ] Implement button handling:
   - [ ] play/pause
   - [ ] previous
   - [ ] next
-  - [ ] fourth button placeholder/configurable action
+  - [x] fourth button placeholder/configurable action
 - [ ] Implement compact display states:
   - [ ] booting
   - [ ] hotspot ready
@@ -180,6 +184,17 @@ Matchbox-specific `base-files` fstab override so future images mount
   - [ ] error
 - [ ] Check for vehicle noise and document whether a ground-loop isolator is
   needed.
+
+Phase 7 status note: `mba-device.service` now drives the Pirate Audio ST7789
+display over SPI0 CE1 and monitors the fourth button GPIO candidates 20 and 24.
+A long press on the fourth button runs `/usr/bin/mba-network-mode toggle`; a
+short press only prompts the hold action on the display. Remote verification on
+`matchbox-audio.local` confirms the service is active, SPI devices exist, and
+display refreshes no longer report write failures. Physical Y-button validation
+confirmed a long press switches `wlan0` from home Wi-Fi to the
+`matchbox-audio` hotspot in car mode. The play/pause, previous, and next
+buttons are intentionally still unbound until playback control exists; for now
+they emit short/long press logs so the physical buttons can be validated.
 
 ## Phase 8: Metadata and Artwork Cache
 

@@ -1,0 +1,15 @@
+[Unit]
+Description=Matchbox Audio device display and buttons
+After=NetworkManager.service data.mount mba-player.service
+Wants=NetworkManager.service data.mount
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/mba-device --network-script /usr/bin/mba-network-mode
+Restart=always
+RestartSec=3
+User=root
+Environment=RUST_LOG=mba_device=info,warn
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/mba-cli",
+    "crates/mba-device",
     "crates/mba-player",
     "crates/mba-protocol",
 ]
@@ -15,10 +16,11 @@ repository = "https://github.com/aortez/matchbox-audio"
 anyhow = "1.0.100"
 axum = "0.8.6"
 clap = { version = "4.5.50", features = ["derive"] }
+embedded-graphics = "0.8.1"
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
+rppal = "0.22.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 tokio = { version = "1.48.0", features = ["macros", "net", "rt-multi-thread", "signal"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
-

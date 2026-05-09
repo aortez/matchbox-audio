@@ -39,6 +39,13 @@ const DEFAULT_USER = 'matchbox';
 const SSH_USERNAME = 'matchbox';
 const REMOTE_UPDATE_DIR = '/data/matchbox-audio/update';
 const REMOTE_UPDATE_HEADROOM_BYTES = 64 * 1024 * 1024;
+const PIRATE_AUDIO_BOOT_CONFIG_LINES = [
+  '# Matchbox Audio Pirate Audio Line Out',
+  'dtparam=spi=on',
+  'dtoverlay=hifiberry-dac',
+  'gpio=25=op,dh',
+  'dtparam=audio=off',
+];
 const LOCAL_UPDATE_SCRIPT = join(
   YOCTO_DIR,
   'pi-base/yocto/meta-pi-base/recipes-support/ab-boot/files/ab-update-with-key',
@@ -272,11 +279,51 @@ async function prepareUpdatePayload(image) {
 }
 
 function requireRemoteOk(remoteTarget, command, failureMessage) {
-  const output = ssh(remoteTarget, command, { timeout: 10 });
-  if (output === null) {
-    throw new Error(failureMessage);
+  const result = spawnSync(
+    'ssh',
+    ['-o', 'ConnectTimeout=10', '-o', 'BatchMode=yes', remoteTarget, command],
+    { encoding: 'utf8' },
+  );
+
+  if (result.status !== 0) {
+    const stderr = result.stderr.trim();
+    throw new Error(stderr ? `${failureMessage}: ${stderr}` : failureMessage);
   }
-  return output;
+
+  return result.stdout.trim();
+}
+
+function ensureRemoteBootConfig(remoteTarget) {
+  info('Checking Pirate Audio boot config...');
+  const quotedLines = PIRATE_AUDIO_BOOT_CONFIG_LINES
+    .map(line => shellQuote(line))
+    .join(' ');
+  const command = `
+set -eu
+config=/boot/config.txt
+sudo -n test -f "$config"
+sudo -n test -w "$config"
+changed=0
+for line in ${quotedLines}; do
+  if ! sudo -n grep -Fxq "$line" "$config"; then
+    printf '%s\\n' "$line" | sudo -n tee -a "$config" >/dev/null
+    changed=1
+  fi
+done
+sudo -n sync
+echo "$changed"
+`;
+  const changed = requireRemoteOk(
+    remoteTarget,
+    command,
+    'Could not update /boot/config.txt for Pirate Audio hardware.',
+  );
+
+  if (changed === '1') {
+    success('Pirate Audio boot config updated.');
+  } else {
+    success('Pirate Audio boot config already present.');
+  }
 }
 
 function preflightRemote(remoteTarget) {
@@ -290,13 +337,24 @@ function preflightRemote(remoteTarget) {
   info('Checking /data mount...');
   const dataFs = requireRemoteOk(
     remoteTarget,
-    "grep ' /data ' /proc/mounts | awk '{ print \\$3 }'",
+    "grep ' /data ' /proc/mounts | awk '{ print $3 }'",
     'Could not verify /data mount on remote device.',
   );
   if (dataFs !== 'ext4') {
     throw new Error(`/data must be mounted as ext4 before updating; got "${dataFs || 'not mounted'}".`);
   }
   success('/data is mounted as ext4.');
+
+  info('Checking /boot mount...');
+  const bootReady = requireRemoteOk(
+    remoteTarget,
+    'sudo -n test -f /boot/cmdline.txt && sudo -n test -f /boot/config.txt && sudo -n test -w /boot/config.txt && echo ok',
+    'Could not verify writable /boot with cmdline.txt and config.txt.',
+  );
+  if (bootReady !== 'ok') {
+    throw new Error('/boot must be mounted and writable before updating.');
+  }
+  success('/boot is mounted and writable.');
 
   info('Preparing remote update directory...');
   const quotedDir = shellQuote(REMOTE_UPDATE_DIR);
@@ -439,6 +497,7 @@ async function main() {
     prepared = await prepareUpdatePayload(image);
     const payloadSize = statSync(prepared.preparedRootfsPath).size;
     verifyRemoteSpace(remoteTarget, payloadSize);
+    ensureRemoteBootConfig(remoteTarget);
 
     const checksum = await calculateChecksum(prepared.preparedRootfsPath);
 

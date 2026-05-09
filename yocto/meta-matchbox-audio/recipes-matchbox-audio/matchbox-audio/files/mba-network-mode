@@ -1,0 +1,219 @@
+#!/bin/sh
+# Switch Matchbox Audio between mutually exclusive home Wi-Fi and car hotspot modes.
+
+set -eu
+
+STATE_DIR="${MBA_NETWORK_STATE_DIR:-/data/matchbox-audio/network}"
+MODE_FILE="$STATE_DIR/mode"
+HOME_CONNECTION_FILE="$STATE_DIR/home-connection"
+HOTSPOT_ENV="$STATE_DIR/hotspot.env"
+HOTSPOT_CONNECTION="${MBA_HOTSPOT_CONNECTION:-matchbox-car-hotspot}"
+WLAN_IFACE="${MBA_WLAN_IFACE:-wlan0}"
+ETH_IFACE="${MBA_ETH_IFACE:-eth0}"
+
+usage() {
+    echo "usage: $0 {status|car|home|toggle}" >&2
+}
+
+ensure_state_dir() {
+    mkdir -p "$STATE_DIR"
+    chmod 755 "$STATE_DIR"
+}
+
+machine_suffix() {
+    if [ -r /etc/machine-id ]; then
+        cut -c 1-8 /etc/machine-id
+    else
+        echo "local000"
+    fi
+}
+
+ensure_hotspot_env() {
+    ensure_state_dir
+    if [ ! -f "$HOTSPOT_ENV" ]; then
+        suffix="$(machine_suffix)"
+        umask 077
+        {
+            echo "HOTSPOT_SSID=matchbox-audio"
+            echo "HOTSPOT_PASSWORD=matchbox-$suffix"
+        } > "$HOTSPOT_ENV"
+    fi
+
+    # shellcheck disable=SC1090
+    . "$HOTSPOT_ENV"
+    : "${HOTSPOT_SSID:=matchbox-audio}"
+    : "${HOTSPOT_PASSWORD:=matchbox-audio}"
+
+    if [ "${#HOTSPOT_PASSWORD}" -lt 8 ]; then
+        echo "error: hotspot password must be at least 8 characters" >&2
+        exit 1
+    fi
+}
+
+wifi_connections() {
+    nmcli -t -f NAME,TYPE connection show | awk -F: '$2 == "802-11-wireless" { print $1 }'
+}
+
+active_wifi_connection() {
+    nmcli -t -f NAME,TYPE,DEVICE connection show --active \
+        | awk -F: '$2 == "802-11-wireless" { print $1; exit }'
+}
+
+active_home_connection() {
+    nmcli -t -f NAME,TYPE,DEVICE connection show --active \
+        | awk -F: -v hotspot="$HOTSPOT_CONNECTION" \
+            '$2 == "802-11-wireless" && $1 != hotspot { print $1; exit }'
+}
+
+active_ethernet_connection() {
+    nmcli -t -f NAME,TYPE,DEVICE connection show --active \
+        | awk -F: '$2 == "802-3-ethernet" { print $1; exit }'
+}
+
+saved_home_connection() {
+    if [ -s "$HOME_CONNECTION_FILE" ]; then
+        cat "$HOME_CONNECTION_FILE"
+        return
+    fi
+
+    wifi_connections | awk -v hotspot="$HOTSPOT_CONNECTION" '$0 != hotspot { print; exit }'
+}
+
+write_mode() {
+    ensure_state_dir
+    echo "$1" > "$MODE_FILE"
+}
+
+device_ip4() {
+    ip -4 addr show "$1" 2>/dev/null | awk '/inet / { sub("/.*", "", $2); print $2; exit }'
+}
+
+ensure_hotspot_profile() {
+    ensure_hotspot_env
+    if ! nmcli -t -f NAME connection show | grep -Fxq "$HOTSPOT_CONNECTION"; then
+        nmcli connection add \
+            type wifi \
+            ifname "$WLAN_IFACE" \
+            con-name "$HOTSPOT_CONNECTION" \
+            ssid "$HOTSPOT_SSID"
+    fi
+
+    nmcli connection modify "$HOTSPOT_CONNECTION" \
+        connection.autoconnect no \
+        802-11-wireless.mode ap \
+        802-11-wireless.band bg \
+        802-11-wireless.ssid "$HOTSPOT_SSID" \
+        ipv4.method shared \
+        ipv6.method ignore \
+        wifi-sec.key-mgmt wpa-psk \
+        wifi-sec.psk "$HOTSPOT_PASSWORD"
+}
+
+down_other_wifi() {
+    nmcli -t -f NAME,TYPE,DEVICE connection show --active \
+        | while IFS=: read -r name type device; do
+            if [ "$type" = "802-11-wireless" ] && [ "$name" != "$HOTSPOT_CONNECTION" ]; then
+                nmcli connection down "$name" >/dev/null 2>&1 || true
+            fi
+        done
+}
+
+mode_status() {
+    ensure_hotspot_env
+
+    active="$(active_wifi_connection || true)"
+    active_home="$(active_home_connection || true)"
+    active_ethernet="$(active_ethernet_connection || true)"
+    if [ "$active" = "$HOTSPOT_CONNECTION" ]; then
+        mode="car"
+        ip_iface="$WLAN_IFACE"
+    elif [ -n "$active_home" ]; then
+        mode="home"
+        ip_iface="$WLAN_IFACE"
+    elif [ -n "$active_ethernet" ]; then
+        mode="ethernet"
+        active="$active_ethernet"
+        ip_iface="$ETH_IFACE"
+    elif [ -s "$MODE_FILE" ]; then
+        mode="$(cat "$MODE_FILE")"
+        ip_iface="$WLAN_IFACE"
+    else
+        mode="unknown"
+        ip_iface="$WLAN_IFACE"
+    fi
+
+    ip4="$(device_ip4 "$ip_iface")"
+    echo "mode=$mode"
+    echo "active_connection=${active:-none}"
+    echo "ssid=${active:-none}"
+    echo "ip4=${ip4:-none}"
+    echo "hotspot_ssid=$HOTSPOT_SSID"
+    echo "hotspot_password=$HOTSPOT_PASSWORD"
+}
+
+switch_car() {
+    ensure_hotspot_profile
+    current_home="$(active_home_connection || true)"
+    if [ -n "$current_home" ]; then
+        ensure_state_dir
+        echo "$current_home" > "$HOME_CONNECTION_FILE"
+    fi
+
+    down_other_wifi
+    if nmcli --wait 30 connection up "$HOTSPOT_CONNECTION"; then
+        write_mode car
+        mode_status
+        return
+    fi
+
+    echo "warning: hotspot failed; restoring home Wi-Fi" >&2
+    home_connection="$(saved_home_connection || true)"
+    if [ -n "$home_connection" ]; then
+        nmcli --wait 30 connection up "$home_connection" >/dev/null 2>&1 || true
+    fi
+    exit 1
+}
+
+switch_home() {
+    ensure_hotspot_env
+    home_connection="$(saved_home_connection || true)"
+    if [ -z "$home_connection" ]; then
+        echo "error: no saved home Wi-Fi connection is available" >&2
+        switch_car >/dev/null
+        exit 1
+    fi
+
+    nmcli connection down "$HOTSPOT_CONNECTION" >/dev/null 2>&1 || true
+    if nmcli --wait 30 connection up "$home_connection"; then
+        write_mode home
+        mode_status
+    else
+        echo "warning: home Wi-Fi failed; falling back to hotspot" >&2
+        switch_car >/dev/null
+        exit 1
+    fi
+}
+
+case "${1:-}" in
+    status)
+        mode_status
+        ;;
+    car)
+        switch_car
+        ;;
+    home)
+        switch_home
+        ;;
+    toggle)
+        mode="$(mode_status | awk -F= '$1 == "mode" { print $2 }')"
+        if [ "$mode" = "car" ]; then
+            switch_home
+        else
+            switch_car
+        fi
+        ;;
+    *)
+        usage
+        exit 1
+        ;;
+esac
