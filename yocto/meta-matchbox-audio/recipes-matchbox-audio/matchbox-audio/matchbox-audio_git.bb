@@ -31,6 +31,7 @@ python () {
             [
                 f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-device.service:True",
                 f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-network-mode:True",
+                f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-network-mode-restore.service:True",
                 f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-player.service:True",
             ]
         ),
@@ -47,9 +48,10 @@ do_install() {
     install -d ${D}${systemd_system_unitdir}
     install -m 0644 ${THISDIR}/files/mba-player.service ${D}${systemd_system_unitdir}/mba-player.service
     install -m 0644 ${THISDIR}/files/mba-device.service ${D}${systemd_system_unitdir}/mba-device.service
+    install -m 0644 ${THISDIR}/files/mba-network-mode-restore.service ${D}${systemd_system_unitdir}/mba-network-mode-restore.service
 }
 
-SYSTEMD_SERVICE:${PN} = "mba-player.service mba-device.service"
+SYSTEMD_SERVICE:${PN} = "mba-network-mode-restore.service mba-player.service mba-device.service"
 SYSTEMD_AUTO_ENABLE = "enable"
 
 FILES:${PN} = " \
@@ -59,4 +61,5 @@ FILES:${PN} = " \
     ${bindir}/mba-network-mode \
     ${systemd_system_unitdir}/mba-player.service \
     ${systemd_system_unitdir}/mba-device.service \
+    ${systemd_system_unitdir}/mba-network-mode-restore.service \
 "

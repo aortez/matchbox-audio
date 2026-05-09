@@ -56,6 +56,7 @@ IMAGE_INSTALL:append = " \
     networkmanager-wifi \
     openssh-sftp-server \
     kbd \
+    rsync \
 "
 
 # BLE provisioning is deferred. Keep BlueZ from pi-base, but avoid pulling in

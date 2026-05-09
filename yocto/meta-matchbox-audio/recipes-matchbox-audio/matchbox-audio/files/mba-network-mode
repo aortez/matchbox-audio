@@ -10,9 +10,10 @@ HOTSPOT_ENV="$STATE_DIR/hotspot.env"
 HOTSPOT_CONNECTION="${MBA_HOTSPOT_CONNECTION:-matchbox-car-hotspot}"
 WLAN_IFACE="${MBA_WLAN_IFACE:-wlan0}"
 ETH_IFACE="${MBA_ETH_IFACE:-eth0}"
+WIFI_DEVICE_TIMEOUT="${MBA_WIFI_DEVICE_TIMEOUT:-30}"
 
 usage() {
-    echo "usage: $0 {status|car|home|toggle}" >&2
+    echo "usage: $0 {status|car|home|toggle|restore}" >&2
 }
 
 ensure_state_dir() {
@@ -57,6 +58,36 @@ wifi_connections() {
     nmcli -t -f NAME,TYPE connection show | awk -F: '$2 == "802-11-wireless" { print $1 }'
 }
 
+wifi_device_state() {
+    nmcli -t -f DEVICE,TYPE,STATE device status \
+        | awk -F: -v iface="$WLAN_IFACE" '$1 == iface && $2 == "wifi" { print $3; exit }'
+}
+
+wait_wifi_device() {
+    timeout="$1"
+    elapsed=0
+
+    nmcli radio wifi on >/dev/null 2>&1 || true
+
+    while [ "$elapsed" -lt "$timeout" ]; do
+        state="$(wifi_device_state || true)"
+        case "$state" in
+            ""|unavailable)
+                ;;
+            *)
+                return 0
+                ;;
+        esac
+
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    echo "error: Wi-Fi device $WLAN_IFACE is not available after ${timeout}s" >&2
+    nmcli -t -f DEVICE,TYPE,STATE device status >&2 || true
+    return 1
+}
+
 active_wifi_connection() {
     nmcli -t -f NAME,TYPE,DEVICE connection show --active \
         | awk -F: '$2 == "802-11-wireless" { print $1; exit }'
@@ -90,6 +121,14 @@ saved_home_connection() {
 write_mode() {
     ensure_state_dir
     echo "$1" > "$MODE_FILE"
+}
+
+saved_mode() {
+    if [ -s "$MODE_FILE" ]; then
+        cat "$MODE_FILE"
+    else
+        echo "car"
+    fi
 }
 
 device_ip4() {
@@ -167,6 +206,7 @@ mode_status() {
 }
 
 switch_car() {
+    wait_wifi_device "$WIFI_DEVICE_TIMEOUT"
     ensure_hotspot_profile
     current_home="$(active_home_connection || true)"
     if [ -n "$current_home" ]; then
@@ -198,6 +238,7 @@ switch_home() {
         exit 1
     fi
 
+    wait_wifi_device "$WIFI_DEVICE_TIMEOUT"
     nmcli connection down "$HOTSPOT_CONNECTION" >/dev/null 2>&1 || true
     if nmcli --wait 30 connection up "$home_connection"; then
         write_mode home
@@ -222,6 +263,14 @@ case "${1:-}" in
     toggle)
         mode="$(mode_status | awk -F= '$1 == "mode" { print $2 }')"
         if [ "$mode" = "car" ]; then
+            switch_home
+        else
+            switch_car
+        fi
+        ;;
+    restore)
+        mode="$(saved_mode)"
+        if [ "$mode" = "home" ]; then
             switch_home
         else
             switch_car

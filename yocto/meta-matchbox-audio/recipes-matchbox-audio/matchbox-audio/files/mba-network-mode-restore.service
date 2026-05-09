@@ -1,0 +1,13 @@
+[Unit]
+Description=Restore Matchbox Audio network mode
+After=NetworkManager.service data.mount
+Wants=NetworkManager.service data.mount
+Before=mba-player.service mba-device.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/mba-network-mode restore
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
