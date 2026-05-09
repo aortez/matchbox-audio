@@ -75,7 +75,9 @@ local_conf_header:
 
   rpi: |
     DISABLE_SPLASH = "1"
+    ENABLE_SPI_BUS = "1"
     CMDLINE_ROOT_PARTITION = "/dev/mmcblk0p2"
     CMDLINE:append = " console=tty1"
+    RPI_EXTRA_CONFIG:append = "\n# Matchbox Audio Pirate Audio Line Out\ndtoverlay=hifiberry-dac\ngpio=25=op,dh\ndtparam=audio=off\n"
 
 target: matchbox-audio-image

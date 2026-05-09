@@ -51,27 +51,108 @@ there is enough system scaffolding to do so.
 - [x] Define gitignored `config/hotspot.local.json`.
 - [x] Create initial flash script.
 - [x] Create remote deploy/update script that reuses pi-base helpers.
-- [ ] Flash the Pi and verify:
-  - [ ] SSH works
-  - [ ] `mba-player.service` starts
-  - [ ] `mba-cli status` works over SSH
-  - [ ] `/data` mounts
-  - [ ] A/B slot status is readable
+- [x] Flash the Pi and verify:
+  - [x] SSH works
+  - [x] `mba-player.service` starts
+  - [x] `mba-cli status` works over SSH
+  - [x] `/data` mounts
+  - [x] A/B slot status is readable
+
+Phase 1 target note: the verified Raspberry Pi is reachable at
+`matchbox-audio.local` as `matchbox`. Remote A/B update and smoke verification
+passed with the device booted from slot `b` (`/dev/mmcblk0p3`). During that run,
+the rootfs flash and SSH-key injection succeeded, but the final boot-slot switch
+had to be completed directly on the FAT boot partition because `/boot` on the
+running rootfs was not the mounted boot partition. Follow-up fix: add a
+Matchbox-specific `base-files` fstab override so future images mount
+`/dev/mmcblk0p1` at `/boot`, matching the dirtsim update pattern.
+
+Follow-up status: the `/boot` fstab override is implemented and verified by
+remote A/B updates on `matchbox-audio.local`. The update flow also ensures the
+Pirate Audio boot config lines are present before rebooting into a new rootfs.
 
 ## Phase 2: Hotspot and Target Networking
 
-- [ ] Define mutually exclusive network modes:
-  - [ ] car mode as WPA2 hotspot
-  - [ ] home mode as Wi-Fi client
-  - [ ] no AP/client simultaneous operation for MVP
-- [ ] Implement flash-time hotspot config loading.
-- [ ] Generate NetworkManager hotspot profile.
-- [ ] Configure WPA2 SSID/password.
-- [ ] Ensure hotspot starts by default in car mode.
-- [ ] Verify web/API access over hotspot.
-- [ ] Verify SSH/`rsync` access over hotspot.
-- [ ] Show hotspot status in `mba-cli status`.
-- [ ] Record target-network troubleshooting notes.
+- [x] Define mutually exclusive network modes:
+  - [x] car mode as WPA2 hotspot
+  - [x] home mode as Wi-Fi client
+  - [x] no AP/client simultaneous operation for MVP
+- [x] Implement flash-time hotspot config loading.
+- [x] Generate NetworkManager hotspot profile.
+- [x] Configure WPA2 SSID/password.
+- [x] Ensure hotspot starts by default in car mode.
+- [x] Verify web/API access over hotspot.
+- [x] Verify SSH access over hotspot.
+- [x] Add `rsync` to the image and verify `rsync` access over hotspot.
+- [x] Show hotspot status in `mba-cli status`.
+- [x] Record target-network troubleshooting notes.
+
+Phase 2 status note: `/usr/bin/mba-network-mode` owns mutually exclusive
+`home`, `car`, `toggle`, `restore`, and `status` operations. `car` mode brings
+up the NetworkManager shared WPA2 hotspot profile `matchbox-car-hotspot` with
+SSID `matchbox-audio`; `home` mode tears it down and restores the saved home Wi-Fi
+connection. The standalone `dnsmasq.service` is masked in the image because it
+conflicts with NetworkManager shared hotspot mode. On-device verification on
+`matchbox-audio.local` confirmed Y-button long press activates the hotspot, and
+the Phase 2 status update was A/B deployed to slot `b` on May 9, 2026 with
+`mba-cli status` reporting the current network mode, active connection, IPv4
+address, hotspot SSID, and hotspot password.
+
+Hotspot client verification on May 9, 2026 used the workstation Wi-Fi joined to
+`matchbox-audio` while Ethernet stayed connected as the fallback path. From the
+hotspot client, `10.42.0.1` responded to ping, `/` rendered the web page with
+`Network: car`, `/api/v1/status` reported `mode=car`, and SSH to
+`matchbox@10.42.0.1` ran `mba-cli status`. Follow-up verification after adding
+`rsync` to the image confirmed `rsync` over hotspot into
+`/data/music/_sync-test`. The host-side `sync_music.sh` helper defaults to
+syncing `~/Music` to `/data/music`, and a small test sync verified the helper
+path to `/data/music/_sync-script-test`.
+
+Phase 2 completion note: `yocto/scripts/flash.mjs` now reads the gitignored
+`config/hotspot.local.json` file at flash time and injects
+`/data/matchbox-audio/network/hotspot.env` after any `/data` restore so local
+hotspot settings win. The `mba-network-mode-restore.service` boot unit restores
+the saved mode from `/data/matchbox-audio/network/mode` and defaults to car mode
+when no saved mode exists. On May 9, 2026, the rebuilt image was A/B deployed to
+slot `a`; smoke tests passed in saved home mode, the restore unit exited
+successfully, `rsync 3.2.7` was present, and a no-mode simulation switched the
+device to car mode with `10.42.0.1` reachable before restoring the device to
+home mode.
+
+## Phase 2.5: Service Users and Permission Hardening
+
+- [ ] Define target user and group model before adding MPD/library write paths:
+  - [ ] `matchbox` as SSH/deploy/admin user
+  - [ ] `mba-player` as unprivileged app daemon user
+  - [ ] `mba-device` as root or hardware-capable service user
+  - [ ] `mpd` as playback daemon user
+- [ ] Replace broad `matchbox ALL=(ALL) NOPASSWD: ALL` sudo with an allowlist.
+- [ ] Allow `matchbox` only the deployment/admin commands it needs:
+  - [ ] A/B update helpers
+  - [ ] reboot/poweroff
+  - [ ] selected `systemctl` service operations
+  - [ ] selected `journalctl` access
+  - [ ] network-mode helper commands
+- [ ] Decide whether `mba-player` should call privileged helpers directly:
+  - [ ] prefer no sudo for normal status reads
+  - [ ] if needed, allow only `/usr/bin/mba-network-mode status`
+- [ ] Define `/data` ownership and modes:
+  - [ ] `/data/music` writable by SSH/admin workflow
+  - [ ] `/data/matchbox-audio` writable by Matchbox app services
+  - [ ] `/data/mpd` writable by MPD
+  - [ ] hotspot/network state readable only as needed
+- [x] Stop exposing hotspot password in unauthenticated status by default, or
+  gate it behind a local/admin-only path.
+- [ ] Add minimal systemd hardening for services where practical.
+- [ ] Verify remote deploy, `mba-cli status`, button network switching, MPD, and
+  library access after permission tightening.
+
+Phase 2.5 rationale: the Phase 1/2 image intentionally uses a development
+posture: SSH key login as `matchbox`, a local-console recovery password, and
+full passwordless sudo for fast bring-up. Before adding MPD, library browsing,
+and write-heavy app state, tighten this into explicit service boundaries so
+network control, hardware access, playback state, and user music do not all
+share the same privilege level.
 
 ## Phase 3: MPD on Target
 
@@ -155,13 +236,13 @@ there is enough system scaffolding to do so.
 
 ## Phase 7: Pirate Audio Display and Button Bring-Up
 
-- [ ] Configure PIM483 ST7789 display.
-- [ ] Configure PIM483 buttons.
+- [x] Configure PIM483 ST7789 display.
+- [x] Configure PIM483 buttons.
 - [ ] Implement button handling:
   - [ ] play/pause
   - [ ] previous
   - [ ] next
-  - [ ] fourth button placeholder/configurable action
+  - [x] fourth button placeholder/configurable action
 - [ ] Implement compact display states:
   - [ ] booting
   - [ ] hotspot ready
@@ -171,6 +252,17 @@ there is enough system scaffolding to do so.
   - [ ] error
 - [ ] Check for vehicle noise and document whether a ground-loop isolator is
   needed.
+
+Phase 7 status note: `mba-device.service` now drives the Pirate Audio ST7789
+display over SPI0 CE1 and monitors the fourth button GPIO candidates 20 and 24.
+A long press on the fourth button runs `/usr/bin/mba-network-mode toggle`; a
+short press only prompts the hold action on the display. Remote verification on
+`matchbox-audio.local` confirms the service is active, SPI devices exist, and
+display refreshes no longer report write failures. Physical Y-button validation
+confirmed a long press switches `wlan0` from home Wi-Fi to the
+`matchbox-audio` hotspot in car mode. The play/pause, previous, and next
+buttons are intentionally still unbound until playback control exists; for now
+they emit short/long press logs so the physical buttons can be validated.
 
 ## Phase 8: Metadata and Artwork Cache
 

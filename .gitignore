@@ -12,6 +12,11 @@
 config/hotspot.local.json
 
 # Yocto local build state and flash-time secrets.
+/build/
+/meta-openembedded/
+/meta-raspberrypi/
+/meta-rust-bin/
+/poky/
 /yocto/build/
 /yocto/downloads/
 /yocto/meta-openembedded/

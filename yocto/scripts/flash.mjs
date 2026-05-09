@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
-import { existsSync } from 'fs';
+import { execFileSync } from 'child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
 import { basename, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -33,8 +35,10 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const YOCTO_DIR = dirname(__dirname);
+const REPO_ROOT = dirname(YOCTO_DIR);
 const CONFIG_FILE = join(YOCTO_DIR, '.flash-config.json');
 const WIFI_CREDS_FILE = join(YOCTO_DIR, 'wifi-creds.local');
+const HOTSPOT_CONFIG_FILE = join(REPO_ROOT, 'config/hotspot.local.json');
 const DEFAULT_HOSTNAME = 'matchbox-audio';
 const SSH_USERNAME = 'matchbox';
 const SSH_UID = 1000;
@@ -140,6 +144,106 @@ async function chooseHostname(config, specifiedDevice, dryRun) {
   return hostname;
 }
 
+function loadHotspotConfig(configPath) {
+  if (!existsSync(configPath)) {
+    warn('No config/hotspot.local.json found; the Pi will generate default hotspot credentials.');
+    return null;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(configPath, 'utf8'));
+  } catch (err) {
+    throw new Error(`${configPath} is not valid JSON: ${err.message}`);
+  }
+
+  const hotspot = parsed.hotspot || {};
+  const ssid = typeof hotspot.ssid === 'string' ? hotspot.ssid.trim() : '';
+  const password = typeof hotspot.password === 'string' ? hotspot.password : '';
+
+  if (!ssid) {
+    throw new Error(`${configPath} must set hotspot.ssid.`);
+  }
+  if (password.length < 8) {
+    throw new Error(`${configPath} hotspot.password must be at least 8 characters.`);
+  }
+
+  return { ssid, password };
+}
+
+function shellSingleQuote(value) {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function commandErrorDetail(err) {
+  const stderr = err?.stderr?.toString().trim();
+  if (stderr) {
+    return stderr;
+  }
+  return err?.message || String(err);
+}
+
+function hotspotEnv(config) {
+  return `HOTSPOT_SSID=${shellSingleQuote(config.ssid)}\nHOTSPOT_PASSWORD=${shellSingleQuote(config.password)}\n`;
+}
+
+function injectHotspotConfig(device, config, dryRun = false) {
+  if (!config) {
+    return;
+  }
+
+  const dataPartition = getPartitionDevice(device, 4);
+  info(`Injecting hotspot config for SSID "${config.ssid}"...`);
+
+  if (dryRun) {
+    log(`  Would mount ${dataPartition}`);
+    log('  Would write /data/matchbox-audio/network/hotspot.env');
+    log('  Would unmount');
+    return;
+  }
+
+  const workDir = mkdtempSync(join(tmpdir(), 'matchbox-hotspot-'));
+  const mountPoint = join(workDir, 'data');
+  const envPath = join(workDir, 'hotspot.env');
+  let mounted = false;
+  let pendingError = null;
+
+  try {
+    mkdirSync(mountPoint);
+    writeFileSync(envPath, hotspotEnv(config), { mode: 0o600 });
+    execFileSync('sudo', ['mount', dataPartition, mountPoint], { stdio: 'pipe' });
+    mounted = true;
+    execFileSync('sudo', ['mkdir', '-p', join(mountPoint, 'matchbox-audio/network')], { stdio: 'pipe' });
+    execFileSync('sudo', ['install', '-m', '0600', '-o', 'root', '-g', 'root', envPath, join(mountPoint, 'matchbox-audio/network/hotspot.env')], { stdio: 'pipe' });
+    success('Hotspot config injected.');
+  } catch (err) {
+    pendingError = err;
+  } finally {
+    if (mounted) {
+      try {
+        execFileSync('sudo', ['umount', mountPoint], { stdio: 'pipe' });
+        mounted = false;
+      } catch (err) {
+        const message = `Failed to unmount ${mountPoint} after hotspot config injection: ${commandErrorDetail(err)}. Leaving ${workDir} in place to avoid deleting mounted data.`;
+        warn(message);
+        pendingError = pendingError
+          ? new Error(`${commandErrorDetail(pendingError)}; ${message}`)
+          : new Error(message);
+      }
+    }
+
+    if (mounted) {
+      rmSync(envPath, { force: true });
+    } else {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  }
+
+  if (pendingError) {
+    throw pendingError;
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
 
@@ -193,6 +297,7 @@ async function main() {
 
   const targetDevice = await selectTargetDevice(devices, specifiedDevice);
   const hostname = await chooseHostname(config, specifiedDevice, dryRun);
+  const hotspotConfig = loadHotspotConfig(HOTSPOT_CONFIG_FILE);
 
   let backupDir = null;
   if (!dryRun && hasDataPartition(targetDevice)) {
@@ -234,6 +339,8 @@ async function main() {
       restoreDataPartition(targetDevice, backupDir, dryRun);
       cleanupBackup(backupDir);
     }
+
+    injectHotspotConfig(targetDevice, hotspotConfig, dryRun);
 
     log('');
     success(dryRun ? 'Dry run complete.' : 'Flash complete.');

@@ -23,22 +23,43 @@ do_compile[network] = "1"
 python () {
     srcroot = d.getVar("MATCHBOX_AUDIO_SRCROOT")
     d.appendVarFlag("do_compile", "file-checksums", f" {srcroot}/Cargo.toml:True {srcroot}/Cargo.lock:True")
+    d.appendVarFlag(
+        "do_install",
+        "file-checksums",
+        " "
+        + " ".join(
+            [
+                f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-device.service:True",
+                f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-network-mode:True",
+                f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-network-mode-restore.service:True",
+                f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-player.service:True",
+            ]
+        ),
+    )
 }
 
 do_install() {
     install -d ${D}${bindir}
     install -m 0755 ${CARGO_BINDIR}/mba-player ${D}${bindir}/mba-player
     install -m 0755 ${CARGO_BINDIR}/mba-cli ${D}${bindir}/mba-cli
+    install -m 0755 ${CARGO_BINDIR}/mba-device ${D}${bindir}/mba-device
+    install -m 0755 ${THISDIR}/files/mba-network-mode ${D}${bindir}/mba-network-mode
 
     install -d ${D}${systemd_system_unitdir}
     install -m 0644 ${THISDIR}/files/mba-player.service ${D}${systemd_system_unitdir}/mba-player.service
+    install -m 0644 ${THISDIR}/files/mba-device.service ${D}${systemd_system_unitdir}/mba-device.service
+    install -m 0644 ${THISDIR}/files/mba-network-mode-restore.service ${D}${systemd_system_unitdir}/mba-network-mode-restore.service
 }
 
-SYSTEMD_SERVICE:${PN} = "mba-player.service"
+SYSTEMD_SERVICE:${PN} = "mba-network-mode-restore.service mba-player.service mba-device.service"
 SYSTEMD_AUTO_ENABLE = "enable"
 
 FILES:${PN} = " \
     ${bindir}/mba-player \
     ${bindir}/mba-cli \
+    ${bindir}/mba-device \
+    ${bindir}/mba-network-mode \
     ${systemd_system_unitdir}/mba-player.service \
+    ${systemd_system_unitdir}/mba-device.service \
+    ${systemd_system_unitdir}/mba-network-mode-restore.service \
 "
