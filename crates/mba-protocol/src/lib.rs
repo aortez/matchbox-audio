@@ -7,6 +7,8 @@ pub const SERVICE_NAME: &str = "matchbox-audio";
 pub struct StatusResponse {
     pub service: ServiceInfo,
     pub build: BuildInfo,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network: Option<NetworkInfo>,
 }
 
 impl StatusResponse {
@@ -21,7 +23,13 @@ impl StatusResponse {
                 version: version.into(),
                 git_sha: git_sha.map(Into::into),
             },
+            network: None,
         }
+    }
+
+    pub fn with_network(mut self, network: NetworkInfo) -> Self {
+        self.network = Some(network);
+        self
     }
 }
 
@@ -58,6 +66,16 @@ pub struct BuildInfo {
     pub git_sha: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetworkInfo {
+    pub mode: String,
+    pub active_connection: String,
+    pub ssid: String,
+    pub ip4: String,
+    pub hotspot_ssid: String,
+    pub hotspot_password: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -73,6 +91,25 @@ mod tests {
         assert_eq!(json["service"]["api_version"], API_VERSION);
         assert_eq!(json["build"]["version"], "0.1.0");
         assert_eq!(json["build"]["git_sha"], "abc123");
+        assert!(json.get("network").is_none());
+    }
+
+    #[test]
+    fn serializes_network_status() {
+        let status = StatusResponse::ready("0.1.0", None::<String>).with_network(NetworkInfo {
+            mode: "car".to_string(),
+            active_connection: "matchbox-car-hotspot".to_string(),
+            ssid: "matchbox-audio".to_string(),
+            ip4: "10.42.0.1".to_string(),
+            hotspot_ssid: "matchbox-audio".to_string(),
+            hotspot_password: "matchbox-eccf30e9".to_string(),
+        });
+
+        let json = serde_json::to_value(&status).expect("status serializes");
+
+        assert_eq!(json["network"]["mode"], "car");
+        assert_eq!(json["network"]["ip4"], "10.42.0.1");
+        assert_eq!(json["network"]["hotspot_ssid"], "matchbox-audio");
     }
 
     #[test]

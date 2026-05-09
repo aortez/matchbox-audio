@@ -21,6 +21,10 @@ struct Args {
     /// Address and port for the HTTP API.
     #[arg(long)]
     bind: Option<SocketAddr>,
+
+    /// Path to the network-mode helper script.
+    #[arg(long, default_value = "/usr/bin/mba-network-mode")]
+    network_script: PathBuf,
 }
 
 #[tokio::main]
@@ -37,7 +41,10 @@ async fn main() -> Result<()> {
         env!("CARGO_PKG_VERSION"),
         option_env!("MATCHBOX_AUDIO_GIT_SHA"),
     );
-    let app = http::router(AppState { status });
+    let app = http::router(AppState {
+        status,
+        network_script: args.network_script,
+    });
     let listener = TcpListener::bind(config.bind)
         .await
         .with_context(|| format!("failed to bind HTTP listener on {}", config.bind))?;

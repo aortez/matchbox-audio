@@ -23,6 +23,18 @@ do_compile[network] = "1"
 python () {
     srcroot = d.getVar("MATCHBOX_AUDIO_SRCROOT")
     d.appendVarFlag("do_compile", "file-checksums", f" {srcroot}/Cargo.toml:True {srcroot}/Cargo.lock:True")
+    d.appendVarFlag(
+        "do_install",
+        "file-checksums",
+        " "
+        + " ".join(
+            [
+                f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-device.service:True",
+                f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-network-mode:True",
+                f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-player.service:True",
+            ]
+        ),
+    )
 }
 
 do_install() {

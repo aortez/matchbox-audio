@@ -47,6 +47,14 @@ async fn show_status(server: Url) -> Result<()> {
     if let Some(git_sha) = status.build.git_sha {
         println!("git_sha: {git_sha}");
     }
+    if let Some(network) = status.network {
+        println!("network_mode: {}", network.mode);
+        println!("network_active_connection: {}", network.active_connection);
+        println!("network_ssid: {}", network.ssid);
+        println!("network_ip4: {}", network.ip4);
+        println!("hotspot_ssid: {}", network.hotspot_ssid);
+        println!("hotspot_password: {}", network.hotspot_password);
+    }
 
     Ok(())
 }

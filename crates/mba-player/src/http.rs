@@ -1,9 +1,14 @@
+use std::{path::PathBuf, time::Duration};
+
 use axum::{extract::State, response::Html, routing::get, Json, Router};
-use mba_protocol::StatusResponse;
+use mba_protocol::{NetworkInfo, StatusResponse};
+use tokio::{process::Command, time::timeout};
+use tracing::warn;
 
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub status: StatusResponse,
+    pub network_script: PathBuf,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -14,6 +19,11 @@ pub fn router(state: AppState) -> Router {
 }
 
 async fn index(State(state): State<AppState>) -> Html<String> {
+    let network = read_network_status(&state.network_script).await;
+    let network_mode = network
+        .as_ref()
+        .map(|network| network.mode.as_str())
+        .unwrap_or("unknown");
     Html(format!(
         r#"<!doctype html>
 <html lang="en">
@@ -27,6 +37,7 @@ async fn index(State(state): State<AppState>) -> Html<String> {
     <h1>Matchbox Audio</h1>
     <p>Service state: {state}</p>
     <p>Version: {version}</p>
+    <p>Network: {network_mode}</p>
     <p>API: /api/v1/status</p>
   </main>
 </body>
@@ -34,9 +45,87 @@ async fn index(State(state): State<AppState>) -> Html<String> {
 "#,
         state = state.status.service.state,
         version = state.status.build.version,
+        network_mode = network_mode,
     ))
 }
 
 async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
-    Json(state.status)
+    let mut status = state.status.clone();
+    status.network = read_network_status(&state.network_script).await;
+    Json(status)
+}
+
+async fn read_network_status(network_script: &PathBuf) -> Option<NetworkInfo> {
+    let stdout = match run_network_status_command(network_script, false).await {
+        Ok(stdout) => stdout,
+        Err(error) => match run_network_status_command(network_script, true).await {
+            Ok(stdout) => stdout,
+            Err(sudo_error) => {
+                warn!(
+                    %error,
+                    %sudo_error,
+                    path = %network_script.display(),
+                    "network status helper failed"
+                );
+                return None;
+            }
+        },
+    };
+
+    Some(NetworkInfo {
+        mode: parse_field(&stdout, "mode")
+            .unwrap_or("unknown")
+            .to_string(),
+        active_connection: parse_field(&stdout, "active_connection")
+            .unwrap_or("none")
+            .to_string(),
+        ssid: parse_field(&stdout, "ssid").unwrap_or("none").to_string(),
+        ip4: parse_field(&stdout, "ip4").unwrap_or("none").to_string(),
+        hotspot_ssid: parse_field(&stdout, "hotspot_ssid")
+            .unwrap_or("matchbox-audio")
+            .to_string(),
+        hotspot_password: parse_field(&stdout, "hotspot_password")
+            .unwrap_or("-")
+            .to_string(),
+    })
+}
+
+async fn run_network_status_command(
+    network_script: &PathBuf,
+    sudo: bool,
+) -> Result<String, String> {
+    let mut command = if sudo {
+        let mut command = Command::new("sudo");
+        command.arg("-n").arg(network_script);
+        command
+    } else {
+        Command::new(network_script)
+    };
+    command.arg("status");
+
+    let output = match timeout(Duration::from_secs(5), command.output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(error)) => return Err(format!("failed to run helper: {error}")),
+        Err(_) => return Err("helper timed out".to_string()),
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "helper exited with {}: {}",
+            output.status,
+            stderr.trim()
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn parse_field<'a>(output: &'a str, field: &str) -> Option<&'a str> {
+    let prefix = format!("{field}=");
+    output
+        .lines()
+        .find_map(|line| line.strip_prefix(&prefix))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }

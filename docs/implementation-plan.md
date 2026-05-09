@@ -73,18 +73,32 @@ Pirate Audio boot config lines are present before rebooting into a new rootfs.
 
 ## Phase 2: Hotspot and Target Networking
 
-- [ ] Define mutually exclusive network modes:
-  - [ ] car mode as WPA2 hotspot
-  - [ ] home mode as Wi-Fi client
-  - [ ] no AP/client simultaneous operation for MVP
+- [x] Define mutually exclusive network modes:
+  - [x] car mode as WPA2 hotspot
+  - [x] home mode as Wi-Fi client
+  - [x] no AP/client simultaneous operation for MVP
 - [ ] Implement flash-time hotspot config loading.
-- [ ] Generate NetworkManager hotspot profile.
-- [ ] Configure WPA2 SSID/password.
+- [x] Generate NetworkManager hotspot profile.
+- [x] Configure WPA2 SSID/password.
 - [ ] Ensure hotspot starts by default in car mode.
 - [ ] Verify web/API access over hotspot.
 - [ ] Verify SSH/`rsync` access over hotspot.
-- [ ] Show hotspot status in `mba-cli status`.
-- [ ] Record target-network troubleshooting notes.
+- [x] Show hotspot status in `mba-cli status`.
+- [x] Record target-network troubleshooting notes.
+
+Phase 2 status note: `/usr/bin/mba-network-mode` owns mutually exclusive
+`home`, `car`, `toggle`, and `status` operations. `car` mode brings up the
+NetworkManager shared WPA2 hotspot profile `matchbox-car-hotspot` with SSID
+`matchbox-audio`; `home` mode tears it down and restores the saved home Wi-Fi
+connection. The standalone `dnsmasq.service` is masked in the image because it
+conflicts with NetworkManager shared hotspot mode. On-device verification on
+`matchbox-audio.local` confirmed Y-button long press activates the hotspot, and
+the Phase 2 status update was A/B deployed to slot `b` on May 9, 2026 with
+`mba-cli status` reporting the current network mode, active connection, IPv4
+address, hotspot SSID, and hotspot password. Remaining work is to load hotspot
+settings from flash-time config, decide whether car mode should be the default
+boot mode, and verify web, SSH, and `rsync` access from a client actually joined
+to the hotspot.
 
 ## Phase 3: MPD on Target
 

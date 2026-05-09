@@ -17,7 +17,7 @@ usage() {
 
 ensure_state_dir() {
     mkdir -p "$STATE_DIR"
-    chmod 755 "$STATE_DIR"
+    chmod 755 "$STATE_DIR" 2>/dev/null || true
 }
 
 machine_suffix() {
@@ -37,6 +37,9 @@ ensure_hotspot_env() {
             echo "HOTSPOT_SSID=matchbox-audio"
             echo "HOTSPOT_PASSWORD=matchbox-$suffix"
         } > "$HOTSPOT_ENV"
+        chmod 644 "$HOTSPOT_ENV" 2>/dev/null || true
+    else
+        chmod 644 "$HOTSPOT_ENV" 2>/dev/null || true
     fi
 
     # shellcheck disable=SC1090
@@ -68,6 +71,11 @@ active_home_connection() {
 active_ethernet_connection() {
     nmcli -t -f NAME,TYPE,DEVICE connection show --active \
         | awk -F: '$2 == "802-3-ethernet" { print $1; exit }'
+}
+
+connection_ssid() {
+    nmcli -g 802-11-wireless.ssid connection show "$1" 2>/dev/null \
+        | awk 'NF { print; exit }'
 }
 
 saved_home_connection() {
@@ -124,11 +132,18 @@ mode_status() {
     active="$(active_wifi_connection || true)"
     active_home="$(active_home_connection || true)"
     active_ethernet="$(active_ethernet_connection || true)"
+    ssid="none"
     if [ "$active" = "$HOTSPOT_CONNECTION" ]; then
         mode="car"
+        ssid="$HOTSPOT_SSID"
         ip_iface="$WLAN_IFACE"
     elif [ -n "$active_home" ]; then
         mode="home"
+        active="$active_home"
+        ssid="$(connection_ssid "$active_home" || true)"
+        if [ -z "$ssid" ]; then
+            ssid="$active_home"
+        fi
         ip_iface="$WLAN_IFACE"
     elif [ -n "$active_ethernet" ]; then
         mode="ethernet"
@@ -145,7 +160,7 @@ mode_status() {
     ip4="$(device_ip4 "$ip_iface")"
     echo "mode=$mode"
     echo "active_connection=${active:-none}"
-    echo "ssid=${active:-none}"
+    echo "ssid=$ssid"
     echo "ip4=${ip4:-none}"
     echo "hotspot_ssid=$HOTSPOT_SSID"
     echo "hotspot_password=$HOTSPOT_PASSWORD"
