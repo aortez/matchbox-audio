@@ -115,6 +115,7 @@ function main() {
   expectOk(remoteTarget, 'mba-player service active', 'systemctl is-active mba-player.service');
   expectOk(remoteTarget, 'mba-device service active', 'systemctl is-active mba-device.service');
   expectOk(remoteTarget, 'mpd service active', 'systemctl is-active mpd.service');
+  expectOk(remoteTarget, 'mpd startup volume service active', 'systemctl is-active mba-mpd-startup-volume.service');
   expectOk(remoteTarget, 'network restore service active', 'systemctl is-active mba-network-mode-restore.service');
   expectOk(remoteTarget, 'mba-cli status', 'mba-cli status');
 
@@ -143,6 +144,9 @@ function main() {
 
   expectRemoteValue(remoteTarget, 'mpd no-new-privileges', 'systemctl show -p NoNewPrivileges --value mpd.service', 'yes');
   expectRemoteValue(remoteTarget, 'mpd protect system', 'systemctl show -p ProtectSystem --value mpd.service', 'strict');
+  expectRemoteValue(remoteTarget, 'mpd startup volume service user', 'systemctl show -p User --value mba-mpd-startup-volume.service', 'mpd');
+  expectRemoteValue(remoteTarget, 'mpd startup volume service group', 'systemctl show -p Group --value mba-mpd-startup-volume.service', 'audio');
+  expectRemoteValue(remoteTarget, 'mpd startup volume no-new-privileges', 'systemctl show -p NoNewPrivileges --value mba-mpd-startup-volume.service', 'yes');
   expectRemoteValue(
     remoteTarget,
     'mpd binds 127.0.0.1:6600 only',
@@ -150,6 +154,11 @@ function main() {
     '127.0.0.1:6600',
   );
   expectOk(remoteTarget, 'mpc status reaches mpd', 'mpc status >/dev/null');
+  expectOk(remoteTarget, 'aplay is installed', 'command -v aplay >/dev/null');
+  expectOk(remoteTarget, 'PIM483 boot overlay is configured', "grep -Fxq 'dtoverlay=hifiberry-dac' /boot/config.txt && grep -Fxq 'dtparam=audio=off' /boot/config.txt");
+  expectOk(remoteTarget, 'PIM483 ALSA card is visible', "grep -qi hifiberry /proc/asound/cards && aplay -l | grep -qi hifiberry");
+  expectOk(remoteTarget, 'ALSA default targets Matchbox I2S card', "grep -q 'pcm.matchbox_i2s_hw' /etc/asound.conf");
+  expectOk(remoteTarget, 'MPD ALSA output is configured', "mpc outputs | grep -q 'matchbox-pim483-lineout'");
 
   expectOk(remoteTarget, 'sudo allowlist is visible', 'sudo -n -l');
   expectFail(remoteTarget, 'plain sudo is denied', 'sudo -n true');
@@ -157,6 +166,7 @@ function main() {
   expectFail(remoteTarget, 'shadow read is denied', 'sudo -n cat /etc/shadow');
   expectFail(remoteTarget, 'sudo journalctl is denied', 'sudo -n journalctl -n 1');
   expectOk(remoteTarget, 'journal is readable without sudo', 'id -nG | grep -qw systemd-journal && journalctl --no-pager -n 1 >/dev/null');
+  expectOk(remoteTarget, 'ALSA diagnostics are readable by matchbox', 'id -nG | grep -qw audio && aplay -l >/dev/null');
   expectOk(remoteTarget, 'boot config helper is allowed', 'sudo -n /usr/bin/mba-boot-config ensure-pirate-audio');
   expectOk(remoteTarget, 'mba-ab-update wrapper is allowed', 'sudo -n -l /usr/bin/mba-ab-update >/dev/null');
   expectFail(remoteTarget, 'direct ab-update-with-key is denied', 'sudo -n -l /usr/sbin/ab-update-with-key /data/matchbox-audio/update/probe /data/matchbox-audio/update/key.pub matchbox >/dev/null 2>&1');

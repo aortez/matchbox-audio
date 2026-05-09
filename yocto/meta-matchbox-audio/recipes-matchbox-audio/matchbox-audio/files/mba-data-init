@@ -41,6 +41,7 @@ require_user mba-player
 require_user mpd
 require_group matchbox
 require_group matchbox-audio
+require_group audio
 require_group mpd
 
 ensure_dir "$APP_DIR" root root 0711

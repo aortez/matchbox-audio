@@ -125,7 +125,7 @@ home mode.
   - [x] `matchbox` as SSH/deploy/admin user
   - [x] `mba-player` as unprivileged app daemon user
   - [x] `mba-device` as root or hardware-capable service user
-  - [ ] `mpd` as playback daemon user
+  - [x] `mpd` as playback daemon user
 - [x] Replace broad `matchbox ALL=(ALL) NOPASSWD: ALL` sudo with an allowlist.
 - [x] Allow `matchbox` only the deployment/admin commands it needs:
   - [x] A/B update helpers
@@ -139,7 +139,7 @@ home mode.
 - [x] Define `/data` ownership and modes:
   - [x] `/data/music` writable by SSH/admin workflow
   - [x] `/data/matchbox-audio/state` writable by Matchbox app services
-  - [ ] `/data/mpd` writable by MPD
+  - [x] `/data/mpd` writable by MPD
   - [x] hotspot/network state readable only as needed
 - [x] Stop exposing hotspot password in unauthenticated status by default, or
   gate it behind a local/admin-only path.
@@ -181,10 +181,12 @@ lands.
 - [ ] Keep Unix socket support as an optional later refinement.
 - [x] Configure MPD music, database, playlist, and state paths under `/data`.
 - [x] Add or configure `mpd.service`.
-- [ ] Configure minimal PIM483 I2S line-out audio.
-- [ ] Keep ALSA/DAC output at fixed line level.
-- [ ] Configure MPD software volume with maximum and startup volume caps.
-- [ ] Verify clean MPD playback through PIM483 line-out on the Pi.
+- [x] Configure minimal PIM483 I2S line-out audio.
+- [x] Keep ALSA/DAC output at fixed line level.
+- [x] Configure MPD software volume with startup volume cap.
+- [ ] Enforce user-facing maximum volume cap in `mba-player`.
+- [x] Verify MPD playback reaches the PIM483 ALSA output on the Pi.
+- [x] Verify clean analog line-out by listening through the PIM483 output.
 - [ ] Select Rust MPD client crate or implement minimal MPD protocol client.
 - [ ] Implement `mba-player` MPD connection management.
 - [ ] Implement playback commands:
@@ -209,9 +211,12 @@ landings so each step ends with a deployable, verified image.
   a `null` output. Done.
 - Landing B — PIM483 audio path: confirm the `hifiberry-dac` overlay is
   active, set ALSA's default to the I2S card, replace MPD's `null` output
-  with an ALSA output to the DAC, enable software mixer with
-  `mixer_max_volume "80"` and startup `volume "40"`, sync a small test track
-  to `/data/music`, and verify clean playback through the PIM483 line-out.
+  with an ALSA output to the DAC, enable MPD's software mixer, clamp startup
+  volume to `40`, sync a small test track to `/data/music`, verify MPD playback
+  through the PIM483 output, and confirm clean analog line-out by listening.
+  MPD 0.23.14 does not provide a supported `mixer_max_volume` setting; the
+  user-facing maximum volume cap is enforced in Landing C when playback control
+  moves behind `mba-player`.
 - Landing C — `mba-player` ↔ MPD IPC: pick or build a Rust MPD client, add
   connection management to `mba-player`, expose play/pause/toggle/stop/next/
   previous/seek/volume through the API and `mba-cli`, and surface MPD state
@@ -230,7 +235,8 @@ Phase 3 Landing A status note: on May 9, 2026, the Yocto image gained the
 upstream `mpd` and `mpc` packages from `meta-multimedia` via a bbappend that
 ships a Matchbox `mpd.conf`, drops a hardened `mpd.service` drop-in, narrows
 PACKAGECONFIG to `alsa daemon flac mpg123 vorbis`, and removes the unused
-`mpd.socket`. MPD runs as `mpd:mpd`, binds `127.0.0.1:6600`, and stores its
+`mpd.socket`. MPD runs as user `mpd` with audio-device group `audio`, binds
+`127.0.0.1:6600`, and stores its
 database, playlists, and state under `/data/mpd` (created by `mba-data-init`
 with `mpd:mpd 0750`). Audio output is a `null` sink for now; the PIM483 ALSA
 wiring lands in Landing B. The hardened image was A/B deployed to slot `b` on
@@ -238,6 +244,25 @@ wiring lands in Landing B. The hardened image was A/B deployed to slot `b` on
 new checks for the MPD service, bind address, ProtectSystem=strict, and
 `/data/mpd` ownership. `mpc status` and `mpc update` work over SSH; the
 running `matchbox` user can also `sudo systemctl restart mpd.service`.
+
+Phase 3 Landing B status note: on May 9, 2026, the Yocto image gained a
+Matchbox `alsa-state` bbappend that installs `/etc/asound.conf` with the
+default PCM/control device pointed at card `0`, the PIM483/HifiBerry DAC created
+by the existing `hifiberry-dac` overlay and `dtparam=audio=off` boot config.
+MPD now uses an ALSA output named `matchbox-pim483-lineout` with
+`mixer_type "software"` instead of the Landing A `null` output. A hardened
+`mba-mpd-startup-volume.service` runs after `mpd.service` as `mpd:audio` and
+clamps boot volume to `40` when the saved software volume is unset or higher
+than that. The image also installs `alsa-utils-aplay`, and the `matchbox` admin
+user is in the `audio` group so SSH diagnostics can inspect ALSA devices without
+restoring broad sudo. The image was A/B deployed to slot `b` on
+`matchbox-audio.local`; remote smoke and hardening tests passed, including
+checks for the PIM483 ALSA card, MPD output, startup-volume service, and
+`matchbox` audio diagnostics. A generated FLAC test tone was synced to
+`/data/music/_landing-b-test/test-tone.flac`, scanned by MPD, queued, and played
+through MPD with no `mpd.service` journal errors. Physical listening through the
+analog line-out confirmed the test tone was audible; MPD volume was returned to
+`40` afterward.
 
 ## Phase 4: Filesystem Library Browsing and Queueing
 

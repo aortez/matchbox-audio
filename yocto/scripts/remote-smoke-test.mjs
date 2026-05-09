@@ -84,7 +84,10 @@ function main() {
   check('SSH reachability', () => ssh(remoteTarget, 'echo reachable'));
   check('mba-player service', () => ssh(remoteTarget, 'systemctl is-active mba-player.service'));
   check('mpd service', () => ssh(remoteTarget, 'systemctl is-active mpd.service'));
+  check('mpd startup volume service', () => ssh(remoteTarget, 'systemctl is-active mba-mpd-startup-volume.service'));
   check('mba-cli status', () => ssh(remoteTarget, 'mba-cli status'));
+  check('PIM483 ALSA card', () => ssh(remoteTarget, "aplay -l && grep -qi hifiberry /proc/asound/cards && echo hifiberry-dac"));
+  check('MPD ALSA output', () => ssh(remoteTarget, "mpc outputs | grep 'matchbox-pim483-lineout'"));
   check('/data mount', () => ssh(remoteTarget, "grep ' /data ' /proc/mounts"));
   check('A/B slot status', () => ssh(remoteTarget, 'ab-boot-manager status'));
 

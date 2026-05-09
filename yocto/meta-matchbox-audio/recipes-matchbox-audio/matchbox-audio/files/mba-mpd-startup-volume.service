@@ -1,0 +1,22 @@
+[Unit]
+Description=Clamp MPD startup volume
+After=mpd.service
+Requires=mpd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=mpd
+Group=audio
+ExecStart=/usr/bin/mba-mpd-startup-volume
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+
+[Install]
+WantedBy=multi-user.target
