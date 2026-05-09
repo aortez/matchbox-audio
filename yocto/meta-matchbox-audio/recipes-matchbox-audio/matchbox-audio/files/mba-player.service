@@ -1,16 +1,23 @@
 [Unit]
 Description=Matchbox Audio player daemon
-After=data.mount network.target
-Wants=data.mount
+After=data.mount mba-data-init.service network.target
+Wants=data.mount mba-data-init.service
 
 [Service]
 Type=simple
-User=matchbox
-Group=matchbox
+User=mba-player
+Group=matchbox-audio
 Environment=RUST_LOG=mba_player=info
 ExecStart=/usr/bin/mba-player --bind 0.0.0.0:8090
 Restart=on-failure
 RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/data/matchbox-audio
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
 [Install]
 WantedBy=multi-user.target

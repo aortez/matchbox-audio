@@ -7,13 +7,14 @@ inherit pi-base-image extrausers
 BOOT_DEVICE = "mmcblk0"
 HOSTNAME_DEFAULT = "matchbox-audio"
 
-# Temporary Phase 1 HDMI-console recovery password for user `matchbox`:
-# `matchbox`. Keep SSH password auth disabled below so this is local-console only.
-MATCHBOX_CONSOLE_PASSWORD_HASH = "\$6\$matchbox\$KH1Y8n6bm.xLZ6D.8cyfVT8bjNQBYqRyl201wSMSYm9v/Emm0VEpaiW6go.AZvqRAD51a.CrDNA7GM2DDRQYf0"
+MATCHBOX_DISABLED_PASSWORD_HASH = "\$6\$matchbox-disable\$DblhgQ7I77OMDlKXorQjeVqbShooBW6FBD6XpauH06dkfraRnoWaTpet3/SqZA183/jvcLtESCFOWV1SJqNAF."
 
 EXTRA_USERS_PARAMS = " \
-    useradd -m -u 1000 -s /bin/sh -G sudo matchbox; \
-    usermod -p '${MATCHBOX_CONSOLE_PASSWORD_HASH}' matchbox; \
+    groupadd -g 1000 matchbox; \
+    groupadd -r matchbox-audio; \
+    useradd -m -u 1000 -g matchbox -s /bin/sh matchbox; \
+    usermod -p '${MATCHBOX_DISABLED_PASSWORD_HASH}' matchbox; \
+    useradd -r -g matchbox-audio -d /nonexistent -s /bin/false mba-player; \
 "
 
 setup_matchbox_ssh() {
@@ -26,7 +27,7 @@ ROOTFS_POSTPROCESS_COMMAND:append = " setup_matchbox_ssh;"
 
 setup_matchbox_sudo() {
     install -d -m 755 ${IMAGE_ROOTFS}/etc/sudoers.d
-    echo "matchbox ALL=(ALL) NOPASSWD: ALL" > ${IMAGE_ROOTFS}/etc/sudoers.d/matchbox
+    install -m 0440 ${THISDIR}/files/matchbox-sudoers ${IMAGE_ROOTFS}/etc/sudoers.d/matchbox
     chmod 440 ${IMAGE_ROOTFS}/etc/sudoers.d/matchbox
 }
 ROOTFS_POSTPROCESS_COMMAND:append = " setup_matchbox_sudo;"

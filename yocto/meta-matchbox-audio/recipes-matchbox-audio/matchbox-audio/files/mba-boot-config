@@ -1,0 +1,47 @@
+#!/bin/sh
+# Manage Matchbox Audio boot-partition settings that need root access.
+
+set -eu
+
+usage() {
+    echo "usage: $0 {ensure-pirate-audio}" >&2
+}
+
+ensure_line() {
+    line="$1"
+    if ! grep -Fxq "$line" "$CONFIG"; then
+        printf '%s\n' "$line" >> "$CONFIG"
+        changed=1
+    fi
+}
+
+ensure_pirate_audio() {
+    CONFIG=/boot/config.txt
+    if [ ! -f "$CONFIG" ]; then
+        echo "error: $CONFIG not found" >&2
+        exit 1
+    fi
+    if [ ! -w "$CONFIG" ]; then
+        echo "error: $CONFIG is not writable" >&2
+        exit 1
+    fi
+
+    changed=0
+    ensure_line "# Matchbox Audio Pirate Audio Line Out"
+    ensure_line "dtparam=spi=on"
+    ensure_line "dtoverlay=hifiberry-dac"
+    ensure_line "gpio=25=op,dh"
+    ensure_line "dtparam=audio=off"
+    sync
+    echo "changed=$changed"
+}
+
+case "${1:-}" in
+    ensure-pirate-audio)
+        ensure_pirate_audio
+        ;;
+    *)
+        usage
+        exit 1
+        ;;
+esac

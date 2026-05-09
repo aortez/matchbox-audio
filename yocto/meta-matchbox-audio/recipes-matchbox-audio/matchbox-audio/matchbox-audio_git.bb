@@ -29,6 +29,9 @@ python () {
         " "
         + " ".join(
             [
+                f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-boot-config:True",
+                f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-data-init:True",
+                f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-data-init.service:True",
                 f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-device.service:True",
                 f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-network-mode:True",
                 f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-network-mode-restore.service:True",
@@ -43,22 +46,29 @@ do_install() {
     install -m 0755 ${CARGO_BINDIR}/mba-player ${D}${bindir}/mba-player
     install -m 0755 ${CARGO_BINDIR}/mba-cli ${D}${bindir}/mba-cli
     install -m 0755 ${CARGO_BINDIR}/mba-device ${D}${bindir}/mba-device
+    install -m 0755 ${THISDIR}/files/mba-boot-config ${D}${bindir}/mba-boot-config
     install -m 0755 ${THISDIR}/files/mba-network-mode ${D}${bindir}/mba-network-mode
+    install -d ${D}${sbindir}
+    install -m 0755 ${THISDIR}/files/mba-data-init ${D}${sbindir}/mba-data-init
 
     install -d ${D}${systemd_system_unitdir}
+    install -m 0644 ${THISDIR}/files/mba-data-init.service ${D}${systemd_system_unitdir}/mba-data-init.service
     install -m 0644 ${THISDIR}/files/mba-player.service ${D}${systemd_system_unitdir}/mba-player.service
     install -m 0644 ${THISDIR}/files/mba-device.service ${D}${systemd_system_unitdir}/mba-device.service
     install -m 0644 ${THISDIR}/files/mba-network-mode-restore.service ${D}${systemd_system_unitdir}/mba-network-mode-restore.service
 }
 
-SYSTEMD_SERVICE:${PN} = "mba-network-mode-restore.service mba-player.service mba-device.service"
+SYSTEMD_SERVICE:${PN} = "mba-data-init.service mba-network-mode-restore.service mba-player.service mba-device.service"
 SYSTEMD_AUTO_ENABLE = "enable"
 
 FILES:${PN} = " \
     ${bindir}/mba-player \
     ${bindir}/mba-cli \
     ${bindir}/mba-device \
+    ${bindir}/mba-boot-config \
     ${bindir}/mba-network-mode \
+    ${sbindir}/mba-data-init \
+    ${systemd_system_unitdir}/mba-data-init.service \
     ${systemd_system_unitdir}/mba-player.service \
     ${systemd_system_unitdir}/mba-device.service \
     ${systemd_system_unitdir}/mba-network-mode-restore.service \

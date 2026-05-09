@@ -121,29 +121,29 @@ home mode.
 
 ## Phase 2.5: Service Users and Permission Hardening
 
-- [ ] Define target user and group model before adding MPD/library write paths:
-  - [ ] `matchbox` as SSH/deploy/admin user
-  - [ ] `mba-player` as unprivileged app daemon user
-  - [ ] `mba-device` as root or hardware-capable service user
+- [x] Define target user and group model before adding MPD/library write paths:
+  - [x] `matchbox` as SSH/deploy/admin user
+  - [x] `mba-player` as unprivileged app daemon user
+  - [x] `mba-device` as root or hardware-capable service user
   - [ ] `mpd` as playback daemon user
-- [ ] Replace broad `matchbox ALL=(ALL) NOPASSWD: ALL` sudo with an allowlist.
-- [ ] Allow `matchbox` only the deployment/admin commands it needs:
-  - [ ] A/B update helpers
-  - [ ] reboot/poweroff
-  - [ ] selected `systemctl` service operations
-  - [ ] selected `journalctl` access
-  - [ ] network-mode helper commands
-- [ ] Decide whether `mba-player` should call privileged helpers directly:
-  - [ ] prefer no sudo for normal status reads
-  - [ ] if needed, allow only `/usr/bin/mba-network-mode status`
-- [ ] Define `/data` ownership and modes:
-  - [ ] `/data/music` writable by SSH/admin workflow
-  - [ ] `/data/matchbox-audio` writable by Matchbox app services
+- [x] Replace broad `matchbox ALL=(ALL) NOPASSWD: ALL` sudo with an allowlist.
+- [x] Allow `matchbox` only the deployment/admin commands it needs:
+  - [x] A/B update helpers
+  - [x] reboot/poweroff
+  - [x] selected `systemctl` service operations
+  - [x] selected `journalctl` access
+  - [x] network-mode helper commands
+- [x] Decide whether `mba-player` should call privileged helpers directly:
+  - [x] prefer no sudo for normal status reads
+  - [x] keep `mba-player` on unprivileged `/usr/bin/mba-network-mode status`
+- [x] Define `/data` ownership and modes:
+  - [x] `/data/music` writable by SSH/admin workflow
+  - [x] `/data/matchbox-audio` writable by Matchbox app services
   - [ ] `/data/mpd` writable by MPD
-  - [ ] hotspot/network state readable only as needed
+  - [x] hotspot/network state readable only as needed
 - [x] Stop exposing hotspot password in unauthenticated status by default, or
   gate it behind a local/admin-only path.
-- [ ] Add minimal systemd hardening for services where practical.
+- [x] Add minimal systemd hardening for services where practical.
 - [ ] Verify remote deploy, `mba-cli status`, button network switching, MPD, and
   library access after permission tightening.
 

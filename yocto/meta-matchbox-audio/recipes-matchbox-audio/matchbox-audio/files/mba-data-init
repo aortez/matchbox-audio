@@ -1,0 +1,60 @@
+#!/bin/sh
+# Initialize Matchbox Audio-owned persistent data directories.
+
+set -eu
+
+APP_DIR=/data/matchbox-audio
+MUSIC_DIR=/data/music
+NETWORK_DIR="$APP_DIR/network"
+UPDATE_DIR="$APP_DIR/update"
+MPD_DIR=/data/mpd
+
+require_user() {
+    if ! id "$1" >/dev/null 2>&1; then
+        echo "error: required user $1 does not exist" >&2
+        exit 1
+    fi
+}
+
+require_group() {
+    if ! grep -q "^$1:" /etc/group; then
+        echo "error: required group $1 does not exist" >&2
+        exit 1
+    fi
+}
+
+ensure_dir() {
+    path="$1"
+    owner="$2"
+    group="$3"
+    mode="$4"
+
+    mkdir -p "$path"
+    chown "$owner:$group" "$path"
+    chmod "$mode" "$path"
+}
+
+require_user matchbox
+require_user mba-player
+require_group matchbox
+require_group matchbox-audio
+
+ensure_dir "$APP_DIR" mba-player matchbox-audio 0711
+ensure_dir "$NETWORK_DIR" root matchbox-audio 0750
+ensure_dir "$UPDATE_DIR" matchbox matchbox 0750
+ensure_dir "$MUSIC_DIR" matchbox matchbox 0755
+ensure_dir "$MPD_DIR" root matchbox-audio 0750
+
+if [ -f "$NETWORK_DIR/hotspot.env" ]; then
+    chown root:root "$NETWORK_DIR/hotspot.env"
+    chmod 0600 "$NETWORK_DIR/hotspot.env"
+fi
+
+for file in "$NETWORK_DIR/mode" "$NETWORK_DIR/home-connection"; do
+    if [ -f "$file" ]; then
+        chown root:matchbox-audio "$file"
+        chmod 0640 "$file"
+    fi
+done
+
+echo "Matchbox Audio data initialized"
