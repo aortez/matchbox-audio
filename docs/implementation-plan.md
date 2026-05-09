@@ -51,12 +51,21 @@ there is enough system scaffolding to do so.
 - [x] Define gitignored `config/hotspot.local.json`.
 - [x] Create initial flash script.
 - [x] Create remote deploy/update script that reuses pi-base helpers.
-- [ ] Flash the Pi and verify:
-  - [ ] SSH works
-  - [ ] `mba-player.service` starts
-  - [ ] `mba-cli status` works over SSH
-  - [ ] `/data` mounts
-  - [ ] A/B slot status is readable
+- [x] Flash the Pi and verify:
+  - [x] SSH works
+  - [x] `mba-player.service` starts
+  - [x] `mba-cli status` works over SSH
+  - [x] `/data` mounts
+  - [x] A/B slot status is readable
+
+Phase 1 target note: the verified Raspberry Pi is reachable at
+`matchbox-audio.local` as `matchbox`. Remote A/B update and smoke verification
+passed with the device booted from slot `b` (`/dev/mmcblk0p3`). During that run,
+the rootfs flash and SSH-key injection succeeded, but the final boot-slot switch
+had to be completed directly on the FAT boot partition because `/boot` on the
+running rootfs was not the mounted boot partition. Follow-up fix: add a
+Matchbox-specific `base-files` fstab override so future images mount
+`/dev/mmcblk0p1` at `/boot`, matching the dirtsim update pattern.
 
 ## Phase 2: Hotspot and Target Networking
 
