@@ -346,15 +346,27 @@ function preflightRemote(remoteTarget) {
   success('/data is mounted as ext4.');
 
   info('Checking /boot mount...');
+  const bootMount = requireRemoteOk(
+    remoteTarget,
+    "awk '$2 == \"/boot\" { print $3 \" \" $1; found=1 } END { if (!found) exit 1 }' /proc/mounts",
+    'Could not verify /boot is mounted on the remote device.',
+  );
+  const [bootFs, bootSource] = bootMount.split(/\s+/, 2);
+  if (bootFs !== 'vfat') {
+    throw new Error(
+      `/boot must be the mounted FAT boot partition before updating; got ${bootSource || 'unknown'} (${bootFs || 'unknown'}).`,
+    );
+  }
+
   const bootReady = requireRemoteOk(
     remoteTarget,
-    'sudo -n test -f /boot/cmdline.txt && sudo -n test -f /boot/config.txt && sudo -n test -w /boot/config.txt && echo ok',
+    'sudo -n test -f /boot/cmdline.txt && sudo -n test -w /boot/cmdline.txt && sudo -n test -f /boot/config.txt && sudo -n test -w /boot/config.txt && echo ok',
     'Could not verify writable /boot with cmdline.txt and config.txt.',
   );
   if (bootReady !== 'ok') {
     throw new Error('/boot must be mounted and writable before updating.');
   }
-  success('/boot is mounted and writable.');
+  success(`/boot is mounted and writable: ${bootSource} (${bootFs}).`);
 
   info('Preparing remote update directory...');
   const quotedDir = shellQuote(REMOTE_UPDATE_DIR);

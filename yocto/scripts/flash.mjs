@@ -169,6 +169,14 @@ function shellSingleQuote(value) {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+function commandErrorDetail(err) {
+  const stderr = err?.stderr?.toString().trim();
+  if (stderr) {
+    return stderr;
+  }
+  return err?.message || String(err);
+}
+
 function hotspotEnv(config) {
   return `HOTSPOT_SSID=${shellSingleQuote(config.ssid)}\nHOTSPOT_PASSWORD=${shellSingleQuote(config.password)}\n`;
 }
@@ -191,21 +199,42 @@ function injectHotspotConfig(device, config, dryRun = false) {
   const workDir = mkdtempSync(join(tmpdir(), 'matchbox-hotspot-'));
   const mountPoint = join(workDir, 'data');
   const envPath = join(workDir, 'hotspot.env');
+  let mounted = false;
+  let pendingError = null;
 
   try {
     mkdirSync(mountPoint);
     writeFileSync(envPath, hotspotEnv(config), { mode: 0o600 });
     execFileSync('sudo', ['mount', dataPartition, mountPoint], { stdio: 'pipe' });
+    mounted = true;
     execFileSync('sudo', ['mkdir', '-p', join(mountPoint, 'matchbox-audio/network')], { stdio: 'pipe' });
     execFileSync('sudo', ['install', '-m', '0644', envPath, join(mountPoint, 'matchbox-audio/network/hotspot.env')], { stdio: 'pipe' });
     success('Hotspot config injected.');
+  } catch (err) {
+    pendingError = err;
   } finally {
-    try {
-      execFileSync('sudo', ['umount', mountPoint], { stdio: 'pipe' });
-    } catch {
-      // Ignore unmount failures here; the caller will report the main flash error.
+    if (mounted) {
+      try {
+        execFileSync('sudo', ['umount', mountPoint], { stdio: 'pipe' });
+        mounted = false;
+      } catch (err) {
+        const message = `Failed to unmount ${mountPoint} after hotspot config injection: ${commandErrorDetail(err)}. Leaving ${workDir} in place to avoid deleting mounted data.`;
+        warn(message);
+        pendingError = pendingError
+          ? new Error(`${commandErrorDetail(pendingError)}; ${message}`)
+          : new Error(message);
+      }
     }
-    rmSync(workDir, { recursive: true, force: true });
+
+    if (mounted) {
+      rmSync(envPath, { force: true });
+    } else {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  }
+
+  if (pendingError) {
+    throw pendingError;
   }
 }
 
