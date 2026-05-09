@@ -52,10 +52,8 @@ IMAGE_INSTALL:append = " \
 "
 
 # BLE provisioning is deferred. Keep BlueZ from pi-base, but avoid pulling in
-# the provisioner daemon and Yocto's source-built Rust stack for Phase 1. The
-# inherited nmtui package is not available in this layer set; nmcli is enough
-# for the Phase 1 remote setup loop.
-IMAGE_INSTALL:remove = "wifi-provisioner networkmanager-nmtui"
+# the provisioner daemon and Yocto's source-built Rust stack for Phase 1.
+IMAGE_INSTALL:remove = "wifi-provisioner"
 
 IMAGE_INSTALL:append = " \
     matchbox-audio \

@@ -68,6 +68,8 @@ local_conf_header:
 
     INHERIT:remove = "create-spdx"
 
+    PACKAGECONFIG:append:pn-networkmanager = " nmtui"
+
     PREFERRED_VERSION_rust-bin-cross-arm = "1.86.0"
     PREFERRED_VERSION_cargo-bin-cross-arm = "1.86.0"
 
