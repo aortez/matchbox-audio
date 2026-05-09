@@ -100,6 +100,41 @@ settings from flash-time config, decide whether car mode should be the default
 boot mode, and verify web, SSH, and `rsync` access from a client actually joined
 to the hotspot.
 
+## Phase 2.5: Service Users and Permission Hardening
+
+- [ ] Define target user and group model before adding MPD/library write paths:
+  - [ ] `matchbox` as SSH/deploy/admin user
+  - [ ] `mba-player` as unprivileged app daemon user
+  - [ ] `mba-device` as root or hardware-capable service user
+  - [ ] `mpd` as playback daemon user
+- [ ] Replace broad `matchbox ALL=(ALL) NOPASSWD: ALL` sudo with an allowlist.
+- [ ] Allow `matchbox` only the deployment/admin commands it needs:
+  - [ ] A/B update helpers
+  - [ ] reboot/poweroff
+  - [ ] selected `systemctl` service operations
+  - [ ] selected `journalctl` access
+  - [ ] network-mode helper commands
+- [ ] Decide whether `mba-player` should call privileged helpers directly:
+  - [ ] prefer no sudo for normal status reads
+  - [ ] if needed, allow only `/usr/bin/mba-network-mode status`
+- [ ] Define `/data` ownership and modes:
+  - [ ] `/data/music` writable by SSH/admin workflow
+  - [ ] `/data/matchbox-audio` writable by Matchbox app services
+  - [ ] `/data/mpd` writable by MPD
+  - [ ] hotspot/network state readable only as needed
+- [ ] Stop exposing hotspot password in unauthenticated status by default, or
+  gate it behind a local/admin-only path.
+- [ ] Add minimal systemd hardening for services where practical.
+- [ ] Verify remote deploy, `mba-cli status`, button network switching, MPD, and
+  library access after permission tightening.
+
+Phase 2.5 rationale: the Phase 1/2 image intentionally uses a development
+posture: SSH key login as `matchbox`, a local-console recovery password, and
+full passwordless sudo for fast bring-up. Before adding MPD, library browsing,
+and write-heavy app state, tighten this into explicit service boundaries so
+network control, hardware access, playback state, and user music do not all
+share the same privilege level.
+
 ## Phase 3: MPD on Target
 
 - [ ] Add MPD to the Yocto image.
