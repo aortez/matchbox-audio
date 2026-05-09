@@ -7,9 +7,13 @@ inherit pi-base-image extrausers
 BOOT_DEVICE = "mmcblk0"
 HOSTNAME_DEFAULT = "matchbox-audio"
 
+# Temporary Phase 1 HDMI-console recovery password for user `matchbox`:
+# `matchbox`. Keep SSH password auth disabled below so this is local-console only.
+MATCHBOX_CONSOLE_PASSWORD_HASH = "\$6\$matchbox\$KH1Y8n6bm.xLZ6D.8cyfVT8bjNQBYqRyl201wSMSYm9v/Emm0VEpaiW6go.AZvqRAD51a.CrDNA7GM2DDRQYf0"
+
 EXTRA_USERS_PARAMS = " \
     useradd -m -u 1000 -s /bin/sh -G sudo matchbox; \
-    usermod -p '*' matchbox; \
+    usermod -p '${MATCHBOX_CONSOLE_PASSWORD_HASH}' matchbox; \
 "
 
 setup_matchbox_ssh() {
@@ -26,6 +30,17 @@ setup_matchbox_sudo() {
     chmod 440 ${IMAGE_ROOTFS}/etc/sudoers.d/matchbox
 }
 ROOTFS_POSTPROCESS_COMMAND:append = " setup_matchbox_sudo;"
+
+setup_matchbox_sshd_policy() {
+    install -d -m 755 ${IMAGE_ROOTFS}/etc/ssh/sshd_config.d
+    cat > ${IMAGE_ROOTFS}/etc/ssh/sshd_config.d/99-matchbox-audio.conf <<'EOF'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+PermitRootLogin no
+EOF
+}
+ROOTFS_POSTPROCESS_COMMAND:append = " setup_matchbox_sshd_policy;"
 
 # Pi Zero 2 W Wi-Fi firmware and NetworkManager Wi-Fi support for the initial
 # home-network remote development loop.

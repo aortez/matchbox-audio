@@ -47,6 +47,9 @@ home Wi-Fi credentials, and grows `/data` to fill the card while leaving 10%
 unallocated. The checked-in `../config/hotspot.local.example.json` is reserved
 for the Phase 2 car-mode hotspot work.
 
+For Phase 1 bring-up only, the HDMI console accepts `matchbox` / `matchbox`.
+SSH remains key-only; password login is disabled in `sshd_config.d`.
+
 ## Remote Smoke Test
 
 After boot:
