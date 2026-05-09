@@ -131,14 +131,14 @@ home mode.
   - [x] A/B update helpers
   - [x] reboot/poweroff
   - [x] selected `systemctl` service operations
-  - [x] selected `journalctl` access
+  - [x] journal read access through the `systemd-journal` group
   - [x] network-mode helper commands
 - [x] Decide whether `mba-player` should call privileged helpers directly:
   - [x] prefer no sudo for normal status reads
   - [x] keep `mba-player` on unprivileged `/usr/bin/mba-network-mode status`
 - [x] Define `/data` ownership and modes:
   - [x] `/data/music` writable by SSH/admin workflow
-  - [x] `/data/matchbox-audio` writable by Matchbox app services
+  - [x] `/data/matchbox-audio/state` writable by Matchbox app services
   - [ ] `/data/mpd` writable by MPD
   - [x] hotspot/network state readable only as needed
 - [x] Stop exposing hotspot password in unauthenticated status by default, or

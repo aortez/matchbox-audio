@@ -7,13 +7,11 @@ inherit pi-base-image extrausers
 BOOT_DEVICE = "mmcblk0"
 HOSTNAME_DEFAULT = "matchbox-audio"
 
-MATCHBOX_DISABLED_PASSWORD_HASH = "\$6\$matchbox-disable\$DblhgQ7I77OMDlKXorQjeVqbShooBW6FBD6XpauH06dkfraRnoWaTpet3/SqZA183/jvcLtESCFOWV1SJqNAF."
-
 EXTRA_USERS_PARAMS = " \
     groupadd -g 1000 matchbox; \
     groupadd -r matchbox-audio; \
-    useradd -m -u 1000 -g matchbox -s /bin/sh matchbox; \
-    usermod -p '${MATCHBOX_DISABLED_PASSWORD_HASH}' matchbox; \
+    useradd -m -u 1000 -g matchbox -G systemd-journal -s /bin/sh matchbox; \
+    usermod -p '*' matchbox; \
     useradd -r -g matchbox-audio -d /nonexistent -s /bin/false mba-player; \
 "
 

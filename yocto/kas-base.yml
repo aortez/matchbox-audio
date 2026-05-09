@@ -56,8 +56,8 @@ local_conf_header:
     DATA_SIZE = "100"
 
     PERSISTENT_DATA_APP_DIR = "matchbox-audio"
-    PERSISTENT_DATA_APP_USER = "mba-player"
-    PERSISTENT_DATA_APP_GROUP = "matchbox-audio"
+    PERSISTENT_DATA_APP_USER = "root"
+    PERSISTENT_DATA_APP_GROUP = "root"
     PERSISTENT_DATA_APP_MODE = "0711"
 
     BB_NUMBER_THREADS = "8"

@@ -1,8 +1,7 @@
 Cmnd_Alias MATCHBOX_AB_UPDATE = /usr/sbin/ab-update-with-key *
 Cmnd_Alias MATCHBOX_BOOT_CONFIG = /usr/bin/mba-boot-config ensure-pirate-audio
-Cmnd_Alias MATCHBOX_JOURNAL = /bin/journalctl *, /usr/bin/journalctl *
 Cmnd_Alias MATCHBOX_NETWORK = /usr/bin/mba-network-mode car, /usr/bin/mba-network-mode home, /usr/bin/mba-network-mode toggle, /usr/bin/mba-network-mode restore
 Cmnd_Alias MATCHBOX_POWER = /bin/systemctl reboot, /usr/bin/systemctl reboot, /bin/systemctl poweroff, /usr/bin/systemctl poweroff
 Cmnd_Alias MATCHBOX_SERVICE = /bin/systemctl restart mba-player.service, /usr/bin/systemctl restart mba-player.service, /bin/systemctl restart mba-device.service, /usr/bin/systemctl restart mba-device.service
 
-matchbox ALL=(root) NOPASSWD: MATCHBOX_AB_UPDATE, MATCHBOX_BOOT_CONFIG, MATCHBOX_JOURNAL, MATCHBOX_NETWORK, MATCHBOX_POWER, MATCHBOX_SERVICE
+matchbox ALL=(root) NOPASSWD: MATCHBOX_AB_UPDATE, MATCHBOX_BOOT_CONFIG, MATCHBOX_NETWORK, MATCHBOX_POWER, MATCHBOX_SERVICE

@@ -144,9 +144,12 @@ function main() {
   expectFail(remoteTarget, 'plain sudo is denied', 'sudo -n true');
   expectFail(remoteTarget, 'shell sudo is denied', "sudo -n sh -c 'id'");
   expectFail(remoteTarget, 'shadow read is denied', 'sudo -n cat /etc/shadow');
+  expectFail(remoteTarget, 'sudo journalctl is denied', 'sudo -n journalctl -n 1');
+  expectOk(remoteTarget, 'journal is readable without sudo', 'id -nG | grep -qw systemd-journal && journalctl --no-pager -n 1 >/dev/null');
   expectOk(remoteTarget, 'boot config helper is allowed', 'sudo -n /usr/bin/mba-boot-config ensure-pirate-audio');
 
-  expectRemoteValue(remoteTarget, 'app data directory mode', 'stat -c %U:%G:%a /data/matchbox-audio', 'mba-player:matchbox-audio:711');
+  expectRemoteValue(remoteTarget, 'app data directory mode', 'stat -c %U:%G:%a /data/matchbox-audio', 'root:root:711');
+  expectRemoteValue(remoteTarget, 'app state directory mode', 'stat -c %U:%G:%a /data/matchbox-audio/state', 'mba-player:matchbox-audio:750');
   expectRemoteValue(remoteTarget, 'network data directory mode', 'stat -c %U:%G:%a /data/matchbox-audio/network', 'root:matchbox-audio:750');
   expectRemoteValue(remoteTarget, 'update directory mode', 'stat -c %U:%G:%a /data/matchbox-audio/update', 'matchbox:matchbox:750');
   expectRemoteValue(remoteTarget, 'music directory mode', 'stat -c %U:%G:%a /data/music', 'matchbox:matchbox:755');
