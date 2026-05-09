@@ -445,9 +445,15 @@ function removeStaleRemoteUpdateFiles(remoteTarget, paths) {
 }
 
 async function ensureRemoteUpdateScript(remoteTarget) {
+  const wrapper = ssh(remoteTarget, 'command -v mba-ab-update', { timeout: 10 });
+  if (wrapper) {
+    info(`Remote update helper: ${wrapper}`);
+    return wrapper;
+  }
+
   const existing = ssh(remoteTarget, 'command -v ab-update-with-key', { timeout: 10 });
   if (existing) {
-    info(`Remote update helper: ${existing}`);
+    info(`Remote update helper: ${existing} (legacy bootstrap path)`);
     return 'ab-update-with-key';
   }
 

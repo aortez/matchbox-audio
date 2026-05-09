@@ -1,0 +1,43 @@
+#!/bin/sh
+# Validating wrapper for ab-update-with-key.
+#
+# Sudoers wildcards in command arguments match whitespace and forward
+# slashes, so a sudoers rule like
+#   ab-update-with-key /data/matchbox-audio/update/* /data/matchbox-audio/update/* matchbox
+# can be bypassed by appending an extra argument: a 4-arg call where
+# slot 3 is `root` and slot 4 is `matchbox` matches the rule but causes
+# ab-update-with-key to inject an SSH key for root. This wrapper owns
+# the argument policy in shell instead.
+
+set -eu
+
+UPDATE_DIR=/data/matchbox-audio/update
+EXPECTED_USER=matchbox
+
+if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
+    echo "usage: $0 <image> <ssh-key> [username]" >&2
+    exit 64
+fi
+
+if [ "$#" -eq 3 ] && [ "$3" != "$EXPECTED_USER" ]; then
+    echo "error: username must be $EXPECTED_USER (got: $3)" >&2
+    exit 64
+fi
+
+for path in "$1" "$2"; do
+    if [ ! -f "$path" ]; then
+        echo "error: not a regular file: $path" >&2
+        exit 64
+    fi
+    canonical=$(readlink -f -- "$path")
+    case "$canonical" in
+        "$UPDATE_DIR"/*)
+            ;;
+        *)
+            echo "error: $path resolves outside $UPDATE_DIR (got: $canonical)" >&2
+            exit 64
+            ;;
+    esac
+done
+
+exec /usr/sbin/ab-update-with-key "$1" "$2" "$EXPECTED_USER"

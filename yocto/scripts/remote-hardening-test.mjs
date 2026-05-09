@@ -147,9 +147,36 @@ function main() {
   expectFail(remoteTarget, 'sudo journalctl is denied', 'sudo -n journalctl -n 1');
   expectOk(remoteTarget, 'journal is readable without sudo', 'id -nG | grep -qw systemd-journal && journalctl --no-pager -n 1 >/dev/null');
   expectOk(remoteTarget, 'boot config helper is allowed', 'sudo -n /usr/bin/mba-boot-config ensure-pirate-audio');
-  expectOk(remoteTarget, 'ab-update with update-dir paths and matchbox user is allowed', 'sudo -n -l /usr/sbin/ab-update-with-key /data/matchbox-audio/update/probe /data/matchbox-audio/update/key.pub matchbox >/dev/null');
-  expectFail(remoteTarget, 'ab-update outside update dir is denied', 'sudo -n -l /usr/sbin/ab-update-with-key /tmp/x /tmp/y matchbox >/dev/null 2>&1');
-  expectFail(remoteTarget, 'ab-update with non-matchbox user is denied', 'sudo -n -l /usr/sbin/ab-update-with-key /data/matchbox-audio/update/x /data/matchbox-audio/update/y root >/dev/null 2>&1');
+  expectOk(remoteTarget, 'mba-ab-update wrapper is allowed', 'sudo -n -l /usr/bin/mba-ab-update >/dev/null');
+  expectFail(remoteTarget, 'direct ab-update-with-key is denied', 'sudo -n -l /usr/sbin/ab-update-with-key /data/matchbox-audio/update/probe /data/matchbox-audio/update/key.pub matchbox >/dev/null 2>&1');
+  expectOk(
+    remoteTarget,
+    'mba-ab-update rejects 4-arg whitespace bypass',
+    'touch /data/matchbox-audio/update/_probe-image /data/matchbox-audio/update/_probe-key && '
+      + 'out=$(sudo -n /usr/bin/mba-ab-update /data/matchbox-audio/update/_probe-image /data/matchbox-audio/update/_probe-key root matchbox 2>&1); rc=$?; '
+      + 'rm -f /data/matchbox-audio/update/_probe-image /data/matchbox-audio/update/_probe-key; '
+      + '[ "$rc" -ne 0 ] && echo "$out" | grep -q usage',
+  );
+  expectOk(
+    remoteTarget,
+    'mba-ab-update rejects wrong username',
+    'touch /data/matchbox-audio/update/_probe-image /data/matchbox-audio/update/_probe-key && '
+      + 'out=$(sudo -n /usr/bin/mba-ab-update /data/matchbox-audio/update/_probe-image /data/matchbox-audio/update/_probe-key root 2>&1); rc=$?; '
+      + 'rm -f /data/matchbox-audio/update/_probe-image /data/matchbox-audio/update/_probe-key; '
+      + '[ "$rc" -ne 0 ] && echo "$out" | grep -q "username must be"',
+  );
+  expectOk(
+    remoteTarget,
+    'mba-ab-update rejects path traversal',
+    'out=$(sudo -n /usr/bin/mba-ab-update /data/matchbox-audio/update/../etc/passwd /data/matchbox-audio/update/_probe-key 2>&1); rc=$?; '
+      + '[ "$rc" -ne 0 ] && echo "$out" | grep -qE "(resolves outside|not a regular file)"',
+  );
+  expectOk(
+    remoteTarget,
+    'mba-ab-update rejects paths outside update dir',
+    'out=$(sudo -n /usr/bin/mba-ab-update /etc/passwd /etc/hostname 2>&1); rc=$?; '
+      + '[ "$rc" -ne 0 ] && echo "$out" | grep -q "resolves outside"',
+  );
 
   expectRemoteValue(remoteTarget, 'app data directory mode', 'stat -c %U:%G:%a /data/matchbox-audio', 'root:root:711');
   expectRemoteValue(remoteTarget, 'app state directory mode', 'stat -c %U:%G:%a /data/matchbox-audio/state', 'mba-player:matchbox-audio:750');

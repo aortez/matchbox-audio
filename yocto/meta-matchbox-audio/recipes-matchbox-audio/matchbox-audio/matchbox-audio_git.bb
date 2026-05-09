@@ -29,6 +29,7 @@ python () {
         " "
         + " ".join(
             [
+                f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-ab-update:True",
                 f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-boot-config:True",
                 f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-data-init:True",
                 f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-data-init.service:True",
@@ -46,6 +47,7 @@ do_install() {
     install -m 0755 ${CARGO_BINDIR}/mba-player ${D}${bindir}/mba-player
     install -m 0755 ${CARGO_BINDIR}/mba-cli ${D}${bindir}/mba-cli
     install -m 0755 ${CARGO_BINDIR}/mba-device ${D}${bindir}/mba-device
+    install -m 0755 ${THISDIR}/files/mba-ab-update ${D}${bindir}/mba-ab-update
     install -m 0755 ${THISDIR}/files/mba-boot-config ${D}${bindir}/mba-boot-config
     install -m 0755 ${THISDIR}/files/mba-network-mode ${D}${bindir}/mba-network-mode
     install -d ${D}${sbindir}
@@ -65,6 +67,7 @@ FILES:${PN} = " \
     ${bindir}/mba-player \
     ${bindir}/mba-cli \
     ${bindir}/mba-device \
+    ${bindir}/mba-ab-update \
     ${bindir}/mba-boot-config \
     ${bindir}/mba-network-mode \
     ${sbindir}/mba-data-init \
