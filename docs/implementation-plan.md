@@ -186,20 +186,20 @@ lands.
 - [x] Configure MPD software volume with startup volume cap.
 - [x] Verify MPD playback reaches the PIM483 ALSA output on the Pi.
 - [x] Verify clean analog line-out by listening through the PIM483 output.
-- [ ] Integrate the `mpd_client` crate in `mba-player`.
-- [ ] Implement `mba-player` MPD connection management.
-- [ ] Implement playback commands:
-  - [ ] play
-  - [ ] pause
-  - [ ] toggle
-  - [ ] stop
-  - [ ] next
-  - [ ] previous
-  - [ ] seek
-  - [ ] volume
-- [ ] Add CLI support for playback commands.
-- [ ] Verify commands remotely with `mba-cli`.
-- [ ] Implement status polling or MPD idle/event integration.
+- [x] Integrate the `mpd_client` crate in `mba-player`.
+- [x] Implement `mba-player` MPD connection management.
+- [x] Implement playback commands:
+  - [x] play
+  - [x] pause
+  - [x] toggle
+  - [x] stop
+  - [x] next
+  - [x] previous
+  - [x] seek
+  - [x] volume
+- [x] Add CLI support for playback commands.
+- [x] Verify commands remotely with `mba-cli`.
+- [x] Implement status polling or MPD idle/event integration.
 
 Phase 3 landing plan: the Phase 3 checklist is delivered as five incremental
 landings so each step ends with a deployable, verified image.
@@ -289,6 +289,36 @@ checks for the PIM483 ALSA card, MPD output, startup-volume service, and
 through MPD with no `mpd.service` journal errors. Physical listening through the
 analog line-out confirmed the test tone was audible; MPD volume was returned to
 `40` afterward.
+
+Phase 3 Landing C status note: on May 9, 2026, `mba-player` gained an MPD
+client built on the `mpd_client` crate. A spawned actor task owns the single
+client connection, listens to MPD's `idle` events for `player`, `mixer`, and
+`playlist` (queue) subsystems, and caches a `PlaybackInfo` in a
+`tokio::sync::watch` so `GET /api/v1/status` is a memory read. Eight new
+`POST /api/v1/playback/*` routes (`play`, `pause`, `toggle`, `stop`, `next`,
+`previous`, `seek`, `volume`) forward to the actor; reconnect with
+exponential backoff (500 ms → 10 s) drains pending commands as
+`MpdError::Unavailable` so HTTP requests fail fast while MPD is down. `mba-cli`
+exposes the same verbs (`mba-cli play | pause | toggle | stop | next | prev |
+seek <secs> | volume <0-100>`) and prints the new `playback_*` fields in
+`mba-cli status`. Volume validates `0..=100` only — no software cap, since
+the PIM483 line-out feeds an external amp. The startup volume default was
+bumped from 40 to 80 because that level is comfortable through headphones
+on the line-out. The placeholder web page picked up a denser layout split
+into service, network, and playback rows. The PIM483 panel was rewritten
+into three horizontal bands: a network band (`MODE · connection` plus
+address, or `MODE · hotspot-ssid` plus `pass <password>` in car mode), a
+now-playing band (state glyph + title, artist/album, elapsed/duration on
+the left and `vol N` right-aligned), and a footer hint that still hosts
+`Hold Y for network`. Transport state uses ASCII `>` / `||` / `[]` because
+the iso_8859_1 fonts do not carry the Unicode glyphs. The hardened image was
+A/B deployed to slot `a` on `matchbox-audio.local`; `npm run smoke` and
+`npm run hardening` both passed, including new playback checks
+(`mba-cli status` reports the playback fields and `mba-cli volume 80`
+sets MPD volume). End-to-end verification drove an MPD queue with the
+Landing B test tone through `mba-cli play`, `toggle`, `next`, `seek`,
+`volume`, and `stop`; each command was reflected in `mpc status` and
+audible through the headphone line-out, and MPD volume was left at 80.
 
 ## Phase 4: Filesystem Library Browsing and Queueing
 

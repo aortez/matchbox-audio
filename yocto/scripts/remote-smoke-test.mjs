@@ -86,6 +86,8 @@ function main() {
   check('mpd service', () => ssh(remoteTarget, 'systemctl is-active mpd.service'));
   check('mpd startup volume service', () => ssh(remoteTarget, 'systemctl is-active mba-mpd-startup-volume.service'));
   check('mba-cli status', () => ssh(remoteTarget, 'mba-cli status'));
+  check('mba-cli status reports playback', () => ssh(remoteTarget, "mba-cli status | grep -E '^playback_(state|volume):'"));
+  check('mba-cli volume sets MPD volume', () => ssh(remoteTarget, "mba-cli volume 80 && mpc status | grep -q 'volume:.*80%'"));
   check('PIM483 ALSA card', () => ssh(remoteTarget, "aplay -l && grep -qi hifiberry /proc/asound/cards && echo hifiberry-dac"));
   check('MPD ALSA output', () => ssh(remoteTarget, "mpc outputs | grep 'matchbox-pim483-lineout'"));
   check('/data mount', () => ssh(remoteTarget, "grep ' /data ' /proc/mounts"));

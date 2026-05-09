@@ -10,14 +10,18 @@ use clap::Parser;
 use embedded_graphics::{
     draw_target::DrawTarget,
     geometry::{OriginDimensions, Point, Size},
-    mono_font::{ascii::FONT_10X20, ascii::FONT_6X10, MonoTextStyle},
+    mono_font::{
+        ascii::FONT_10X20,
+        iso_8859_1::{FONT_6X10, FONT_8X13, FONT_8X13_BOLD},
+        MonoTextStyle,
+    },
     pixelcolor::{raw::RawU16, Rgb565},
     prelude::*,
     primitives::{PrimitiveStyle, Rectangle},
     text::Text,
     Pixel,
 };
-use mba_protocol::NetworkMode;
+use mba_protocol::{NetworkMode, PlaybackInfo, PlaybackState, StatusResponse, TrackInfo};
 use rppal::{
     gpio::{Gpio, InputPin, Level, OutputPin},
     spi::{Bus, Mode, SlaveSelect, Spi},
@@ -64,6 +68,10 @@ struct Args {
     /// Path to the network-mode helper script.
     #[arg(long, default_value = "/usr/bin/mba-network-mode")]
     network_script: String,
+
+    /// Base URL of the local mba-player daemon for playback status.
+    #[arg(long, default_value = "http://127.0.0.1:8090")]
+    player_url: String,
 
     /// BCM GPIO pins to treat as the fourth Pirate Audio button.
     #[arg(long = "fourth-button-gpio")]
@@ -120,6 +128,16 @@ fn main() -> Result<()> {
     let mut last_display = expired(DISPLAY_REFRESH);
     let mut last_toggle = expired(BUTTON_COOLDOWN);
     let mut message = String::from("Hold Y for network");
+    let player_client = match reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+    {
+        Ok(client) => Some(client),
+        Err(error) => {
+            warn!(%error, "failed to build player HTTP client; playback band will be empty");
+            None
+        }
+    };
 
     loop {
         if let Some(buttons) = buttons.as_mut() {
@@ -137,6 +155,8 @@ fn main() -> Result<()> {
                                 display.as_mut(),
                                 &mut frame,
                                 &args.network_script,
+                                player_client.as_ref(),
+                                &args.player_url,
                                 &message,
                             );
                             match run_network_toggle(&args.network_script) {
@@ -162,7 +182,14 @@ fn main() -> Result<()> {
         }
 
         if last_display.elapsed() >= DISPLAY_REFRESH {
-            render_status(display.as_mut(), &mut frame, &args.network_script, &message);
+            render_status(
+                display.as_mut(),
+                &mut frame,
+                &args.network_script,
+                player_client.as_ref(),
+                &args.player_url,
+                &message,
+            );
             last_display = Instant::now();
         }
 
@@ -191,6 +218,8 @@ fn render_status(
     display: Option<&mut PirateDisplay>,
     frame: &mut Framebuffer,
     network_script: &str,
+    player_client: Option<&reqwest::blocking::Client>,
+    player_url: &str,
     message: &str,
 ) {
     let Some(display) = display else {
@@ -211,71 +240,183 @@ fn render_status(
         }
     };
 
-    draw_dashboard(frame, &status, message);
+    let playback = player_client.and_then(|client| match playback_status(client, player_url) {
+        Ok(playback) => playback,
+        Err(error) => {
+            warn!(%error, "failed to read playback status");
+            None
+        }
+    });
+
+    draw_dashboard(frame, &status, playback.as_ref(), message);
 
     if let Err(error) = display.flush(frame) {
         warn!(%error, "display refresh failed");
     }
 }
 
-fn draw_dashboard(frame: &mut Framebuffer, status: &NetworkStatus, message: &str) {
-    let title = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
-    let label = MonoTextStyle::new(&FONT_6X10, Rgb565::new(16, 38, 22));
-    let body = MonoTextStyle::new(&FONT_10X20, Rgb565::CYAN);
-    let muted = MonoTextStyle::new(&FONT_6X10, Rgb565::new(18, 30, 18));
-    let accent = match status.mode {
+fn draw_dashboard(
+    frame: &mut Framebuffer,
+    status: &NetworkStatus,
+    playback: Option<&PlaybackInfo>,
+    message: &str,
+) {
+    let title_style = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
+    let mode_color = match status.mode {
         NetworkMode::Car => Rgb565::YELLOW,
         _ => Rgb565::GREEN,
     };
+    let mode_style = MonoTextStyle::new(&FONT_8X13_BOLD, mode_color);
+    let body_style = MonoTextStyle::new(&FONT_8X13, Rgb565::CYAN);
+    let secondary_style = MonoTextStyle::new(&FONT_6X10, Rgb565::new(18, 38, 22));
+    let now_playing_style = MonoTextStyle::new(&FONT_8X13, Rgb565::WHITE);
+    let footer_style = MonoTextStyle::new(&FONT_6X10, Rgb565::new(20, 38, 24));
+    let divider_color = Rgb565::new(4, 10, 8);
 
+    // Background.
     let _ = Rectangle::new(Point::new(0, 0), Size::new(DISPLAY_WIDTH, DISPLAY_HEIGHT))
         .into_styled(PrimitiveStyle::with_fill(Rgb565::BLACK))
         .draw(frame);
-    let _ = Rectangle::new(Point::new(0, 0), Size::new(DISPLAY_WIDTH, 30))
+
+    // Title bar.
+    let _ = Rectangle::new(Point::new(0, 0), Size::new(DISPLAY_WIDTH, 28))
         .into_styled(PrimitiveStyle::with_fill(Rgb565::new(0, 16, 18)))
         .draw(frame);
-    let _ = Text::new("Matchbox Audio", Point::new(8, 22), title).draw(frame);
+    let _ = Text::new("Matchbox Audio", Point::new(8, 20), title_style).draw(frame);
 
-    let mode = status.mode.as_str().to_uppercase();
-    let _ = Text::new("network", Point::new(8, 48), label).draw(frame);
+    draw_divider(frame, 30, divider_color);
+
+    // Network band (rows at y=46 and y=68; band ends at ~78).
+    let mode_label = status.mode.as_str().to_uppercase();
+    let connection_text = match status.mode {
+        NetworkMode::Car => format!("{mode_label} · {}", status.hotspot_ssid),
+        _ => format!("{mode_label} · {}", status.active_connection),
+    };
     let _ = Text::new(
-        &mode,
-        Point::new(8, 72),
-        MonoTextStyle::new(&FONT_10X20, accent),
+        truncate_chars(&connection_text, 28),
+        Point::new(8, 46),
+        mode_style,
     )
     .draw(frame);
 
-    let _ = Text::new("connection", Point::new(8, 96), label).draw(frame);
+    let detail_text = match status.mode {
+        NetworkMode::Car => format!("pass {}", status.hotspot_password),
+        _ => status.ip4.clone(),
+    };
     let _ = Text::new(
-        truncate(&status.active_connection, 20),
-        Point::new(8, 120),
-        body,
+        truncate_chars(&detail_text, 36),
+        Point::new(8, 66),
+        secondary_style,
     )
     .draw(frame);
 
-    let _ = Text::new("address", Point::new(8, 144), label).draw(frame);
-    let _ = Text::new(truncate(&status.ip4, 20), Point::new(8, 168), body).draw(frame);
+    draw_divider(frame, 80, divider_color);
 
-    if status.mode == NetworkMode::Car {
-        let _ = Text::new("hotspot", Point::new(8, 192), label).draw(frame);
-        let _ = Text::new(
-            truncate(&status.hotspot_ssid, 20),
-            Point::new(8, 214),
-            muted,
-        )
+    // Now-playing band (rows at y=98, y=120, y=160; band ends at ~178).
+    match playback {
+        Some(info) => {
+            let glyph = match info.state {
+                PlaybackState::Play => ">",
+                PlaybackState::Pause => "||",
+                PlaybackState::Stop => "[]",
+            };
+            let title_line = format_track_title(glyph, info.track.as_ref());
+            let _ = Text::new(
+                truncate_chars(&title_line, 28),
+                Point::new(8, 100),
+                now_playing_style,
+            )
+            .draw(frame);
+
+            let meta = format_track_meta(info.track.as_ref());
+            let _ = Text::new(
+                truncate_chars(&meta, 36),
+                Point::new(8, 120),
+                secondary_style,
+            )
+            .draw(frame);
+
+            let times = format_track_times(info.track.as_ref());
+            let _ = Text::new(&times, Point::new(8, 160), body_style).draw(frame);
+            let volume_text = format!("vol {:>3}", info.volume);
+            let volume_x = (DISPLAY_WIDTH as i32) - 8 - (volume_text.len() as i32) * 8;
+            let _ = Text::new(&volume_text, Point::new(volume_x, 160), body_style).draw(frame);
+        }
+        None => {
+            let _ = Text::new("idle", Point::new(8, 100), now_playing_style).draw(frame);
+            let _ = Text::new("MPD unavailable", Point::new(8, 120), secondary_style).draw(frame);
+        }
+    }
+
+    draw_divider(frame, 184, divider_color);
+
+    // Footer hint.
+    let _ = Text::new(
+        truncate_chars(message, 36),
+        Point::new(8, 210),
+        footer_style,
+    )
+    .draw(frame);
+}
+
+fn draw_divider(frame: &mut Framebuffer, y: i32, color: Rgb565) {
+    let _ = Rectangle::new(Point::new(0, y), Size::new(DISPLAY_WIDTH, 1))
+        .into_styled(PrimitiveStyle::with_fill(color))
         .draw(frame);
-        let pass = format!("pass {}", status.hotspot_password);
-        let _ = Text::new(truncate(&pass, 28), Point::new(8, 230), muted).draw(frame);
-    } else {
-        let _ = Text::new(truncate(message, 28), Point::new(8, 218), muted).draw(frame);
+}
+
+fn format_track_title(glyph: &str, track: Option<&TrackInfo>) -> String {
+    match track {
+        Some(track) => {
+            let title = track.title.as_deref().unwrap_or_else(|| {
+                track
+                    .uri
+                    .rsplit('/')
+                    .next()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(&track.uri)
+            });
+            format!("{glyph} {title}")
+        }
+        None => format!("{glyph} (no track)"),
     }
 }
 
-fn truncate(value: &str, max_chars: usize) -> &str {
+fn format_track_meta(track: Option<&TrackInfo>) -> String {
+    let track = match track {
+        Some(t) => t,
+        None => return String::new(),
+    };
+    let artist = track.artist.as_deref().unwrap_or("");
+    let album = track.album.as_deref().unwrap_or("");
+    match (artist.is_empty(), album.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => artist.to_string(),
+        (true, false) => album.to_string(),
+        (false, false) => format!("{artist} — {album}"),
+    }
+}
+
+fn format_track_times(track: Option<&TrackInfo>) -> String {
+    let track = match track {
+        Some(t) => t,
+        None => return String::from("00:00 / 00:00"),
+    };
+    let elapsed = track.elapsed_s.unwrap_or(0);
+    let duration = track.duration_s.unwrap_or(0);
+    format!("{} / {}", format_seconds(elapsed), format_seconds(duration))
+}
+
+fn format_seconds(seconds: u32) -> String {
+    let minutes = seconds / 60;
+    let remainder = seconds % 60;
+    format!("{minutes:02}:{remainder:02}")
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> &str {
     if value.chars().count() <= max_chars {
         return value;
     }
-
     let mut end = value.len();
     for (count, (index, _)) in value.char_indices().enumerate() {
         if count == max_chars {
@@ -284,6 +425,23 @@ fn truncate(value: &str, max_chars: usize) -> &str {
         }
     }
     &value[..end]
+}
+
+fn playback_status(
+    client: &reqwest::blocking::Client,
+    base_url: &str,
+) -> Result<Option<PlaybackInfo>> {
+    let url = format!("{}/api/v1/status", base_url.trim_end_matches('/'));
+    let response = client
+        .get(&url)
+        .send()
+        .with_context(|| format!("failed to GET {url}"))?
+        .error_for_status()
+        .with_context(|| format!("non-success from {url}"))?;
+    let payload: StatusResponse = response
+        .json()
+        .with_context(|| format!("failed to parse status JSON from {url}"))?;
+    Ok(payload.playback)
 }
 
 #[derive(Debug)]
