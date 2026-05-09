@@ -128,11 +128,26 @@ bounded and intentional.
 - The device should support library rescans after external sync.
 - The player should remain responsive while rescans are running.
 
+Path handling rules:
+
+- Browsing, search, and queueing paths must stay under `/data/music`.
+- Symlinks are not followed.
+- Hidden files and directories are ignored by default.
+- Audio extension filtering is case-insensitive.
+- Recursive directory queueing uses deterministic depth-first traversal.
+- Within each directory, subdirectories are visited before files, sorted
+  case-insensitively by name with the original name as a tie-breaker.
+
 ## Metadata and Artwork Requirements
 
 The filesystem path is the primary browsing and queueing identity. Metadata and
 artwork improve display quality, search, and now-playing context, but should not
 replace the directory/file model as the first-version navigation structure.
+
+The filesystem under `/data/music` is the source of truth for the music library.
+MPD's database and the Matchbox Audio SQLite/cache layer are derived state. The
+first filesystem browsing and queueing implementation can be path-only; metadata
+and artwork caching follows later.
 
 Baseline metadata:
 
@@ -154,7 +169,7 @@ Artwork sources to consider:
 
 Metadata and artwork indexing should use a hybrid approach:
 
-- MPD owns playback and its normal music database.
+- MPD owns playback and maintains its normal derived music database.
 - Matchbox Audio maintains a supplemental SQLite/cache layer for filesystem
   browsing, path search, stable IDs, display metadata, and resized artwork.
 - Cached metadata and artwork should live under `/data/matchbox-audio`.
@@ -165,12 +180,24 @@ Metadata and artwork indexing should use a hybrid approach:
 - Support play, pause, stop, next, previous, seek, volume, queue clear, enqueue,
   shuffle, and repeat controls.
 - Support scanning or rescanning the local library.
-- Preserve enough state to resume the previous queue and track after reboot.
-- Resume playback automatically after power-on.
+- Preserve enough state after reboot to restore the previous queue, current
+  track, seek position, shuffle/repeat settings, and volume.
+- On boot, resume active playback only if the previous playback state was
+  playing.
 - Make boot resume behavior configurable so automatic resume can be disabled
   later if needed.
+- Use MPD software volume for user-facing volume control.
+- Keep ALSA and the DAC at a fixed line level.
+- Apply configured maximum and startup volume caps so car aux output levels are
+  bounded.
 
 ## Network Requirements
+
+MVP network modes are mutually exclusive:
+
+- Car mode: WPA2 Wi-Fi hotspot.
+- Home mode: Wi-Fi client.
+- Simultaneous AP/client operation is not required for the first version.
 
 Primary in-car mode:
 
@@ -217,6 +244,10 @@ WebSocket should handle richer command/event flows:
 
 Messages should use typed JSON envelopes with correlation IDs for commands and
 monotonic sequence numbers for events.
+
+For the MVP, the HTTP and WebSocket control API is unauthenticated when reached
+over the WPA2-protected hotspot. API routes and message envelopes should remain
+structured so authentication can be added later without replacing the public API.
 
 ## CLI Requirements
 
@@ -324,10 +355,20 @@ The image must use A/B root filesystem partitioning with a shared persistent
 `/data` partition. System updates should write the inactive root filesystem and
 preserve `/data` across reflashes, updates, and rollbacks.
 
-Matchbox Audio should reuse the pi-base/sparkle-duck-shared A/B update
-machinery. Project-specific update scripts may wrap those shared helpers, but
-`mba-player` and the web app do not need to expose update controls in the first
-version.
+Initial 64 GB card partition assumption:
+
+- boot partition
+- root filesystem A
+- root filesystem B
+- ext4 `/data` partition using the remaining space
+
+Normal update and reflash paths should preserve `/data`. Any operation that
+erases `/data` should be an explicit maintenance or recovery action.
+
+Matchbox Audio should use the pi-base layer and helper scripts from the
+`sparkle-duck-shared` repository for A/B update machinery. Project-specific
+update scripts may wrap those shared helpers, but `mba-player` and the web app
+do not need to expose update controls in the first version.
 
 Flashing should support a local hotspot configuration file. The repository
 should include `config/hotspot.local.example.json`, which users copy to
@@ -379,9 +420,10 @@ System services:
 - Avoid storing secrets outside persistent protected locations.
 - Keep the real hotspot configuration file out of git.
 - Treat the WPA2-protected car hotspot as a local trusted network for the first
-  version, but keep API boundaries explicit enough to add authentication later.
+  version.
+- The MVP control API is unauthenticated on that trusted local network, but API
+  boundaries should remain explicit enough to add authentication later.
 
 ## Open Questions
 
 - What should the fourth hardware button do?
-- What is the implementation scope for later Bluetooth audio sink support?

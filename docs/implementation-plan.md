@@ -35,9 +35,14 @@ there is enough system scaffolding to do so.
 
 ## Phase 1: Early Yocto Image and Remote Deploy Loop
 
-- [ ] Add `sparkle-duck-shared` or pi-base integration.
+- [ ] Add the pi-base layer/helpers from the `sparkle-duck-shared` repository.
 - [ ] Create Matchbox Audio Yocto layer.
 - [ ] Create image recipe using A/B root filesystems and shared `/data`.
+- [ ] Document the 64 GB card partition assumption:
+  - [ ] boot partition
+  - [ ] root filesystem A
+  - [ ] root filesystem B
+  - [ ] ext4 `/data` partition using the remaining space
 - [ ] Package minimal `mba-player`.
 - [ ] Package minimal `mba-cli`.
 - [ ] Add `mba-player.service`.
@@ -55,6 +60,10 @@ there is enough system scaffolding to do so.
 
 ## Phase 2: Hotspot and Target Networking
 
+- [ ] Define mutually exclusive network modes:
+  - [ ] car mode as WPA2 hotspot
+  - [ ] home mode as Wi-Fi client
+  - [ ] no AP/client simultaneous operation for MVP
 - [ ] Implement flash-time hotspot config loading.
 - [ ] Generate NetworkManager hotspot profile.
 - [ ] Configure WPA2 SSID/password.
@@ -72,7 +81,10 @@ there is enough system scaffolding to do so.
 - [ ] Keep Unix socket support as an optional later refinement.
 - [ ] Configure MPD music, database, playlist, and state paths under `/data`.
 - [ ] Add or configure `mpd.service`.
-- [ ] Verify MPD audio output path on the Pi.
+- [ ] Configure minimal PIM483 I2S line-out audio.
+- [ ] Keep ALSA/DAC output at fixed line level.
+- [ ] Configure MPD software volume with maximum and startup volume caps.
+- [ ] Verify clean MPD playback through PIM483 line-out on the Pi.
 - [ ] Select Rust MPD client crate or implement minimal MPD protocol client.
 - [ ] Implement `mba-player` MPD connection management.
 - [ ] Implement playback commands:
@@ -91,16 +103,23 @@ there is enough system scaffolding to do so.
 ## Phase 4: Filesystem Library Browsing and Queueing
 
 - [ ] Implement safe path handling under `/data/music`.
+- [ ] Do not follow symlinks.
+- [ ] Ignore hidden files and directories by default.
+- [ ] Use case-insensitive audio extension filtering.
 - [ ] Implement `GET /api/v1/library/list?path=...`.
 - [ ] Implement path search.
 - [ ] Implement queue by file.
 - [ ] Implement queue by directory.
-- [ ] Define stable recursive directory ordering.
+- [ ] Define stable recursive directory ordering:
+  - [ ] depth-first traversal
+  - [ ] directories before files
+  - [ ] case-insensitive name sort with original name as tie-breaker
 - [ ] Filter supported audio formats:
   - [ ] Ogg
   - [ ] MP3
   - [ ] FLAC
 - [ ] Ignore non-audio files for playback operations.
+- [ ] Keep Phase 4 browsing and queueing filesystem/path-only.
 - [ ] Add CLI commands:
   - [ ] `mba-cli list`
   - [ ] `mba-cli search`
@@ -134,10 +153,8 @@ there is enough system scaffolding to do so.
 - [ ] Verify the app works without internet access.
 - [ ] Verify the app over the Pi hotspot.
 
-## Phase 7: Pirate Audio Hardware Bring-Up
+## Phase 7: Pirate Audio Display and Button Bring-Up
 
-- [ ] Configure PIM483 I2S line-out audio.
-- [ ] Verify clean MPD playback through line-out.
 - [ ] Configure PIM483 ST7789 display.
 - [ ] Configure PIM483 buttons.
 - [ ] Implement button handling:
