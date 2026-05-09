@@ -1,0 +1,8 @@
+# KAS configuration for Raspberry Pi Zero 2 W.
+
+header:
+  version: 14
+  includes:
+    - kas-base.yml
+
+machine: raspberrypi0-2w

@@ -1,0 +1,25 @@
+/target/
+/crates/oe-logs
+/crates/oe-workdir
+
+# Local editor and OS files.
+.DS_Store
+*.swp
+*.swo
+
+# Local environment and device configuration.
+.env
+config/hotspot.local.json
+
+# Yocto local build state and flash-time secrets.
+/yocto/build/
+/yocto/downloads/
+/yocto/meta-openembedded/
+/yocto/meta-raspberrypi/
+/yocto/meta-rust-bin/
+/yocto/sstate-cache/
+/yocto/node_modules/
+/yocto/poky/
+/yocto/.flash-config.json
+/yocto/.gnu-hosttools/
+/yocto/wifi-creds.local

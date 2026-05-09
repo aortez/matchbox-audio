@@ -9,48 +9,48 @@ there is enough system scaffolding to do so.
 
 ## Phase 0: Repository and Minimal Rust Skeleton
 
-- [ ] Create Rust workspace.
-- [ ] Add crates:
-  - [ ] `mba-protocol`
-  - [ ] `mba-player`
-  - [ ] `mba-cli`
-- [ ] Add repository-level `.gitignore`.
-- [ ] Adopt initial Rust stack:
-  - [ ] `tokio`
-  - [ ] `axum`
-  - [ ] `clap`
-  - [ ] `serde` / `serde_json`
-  - [ ] `tracing`
-- [ ] Add basic developer commands for format, lint, test, and build.
-- [ ] Add initial README with local build/run basics.
-- [ ] Implement `mba-player` as a minimal daemon with:
-  - [ ] config loading
-  - [ ] logging
-  - [ ] `GET /api/v1/status`
-  - [ ] static placeholder response identifying version/build info
-  - [ ] HTTP/WebSocket port `8090`
-  - [ ] minimal placeholder web page served from the daemon
-- [ ] Implement `mba-cli status` against local `mba-player`.
-- [ ] Add protocol serialization tests.
+- [x] Create Rust workspace.
+- [x] Add crates:
+  - [x] `mba-protocol`
+  - [x] `mba-player`
+  - [x] `mba-cli`
+- [x] Add repository-level `.gitignore`.
+- [x] Adopt initial Rust stack:
+  - [x] `tokio`
+  - [x] `axum`
+  - [x] `clap`
+  - [x] `serde` / `serde_json`
+  - [x] `tracing`
+- [x] Add basic developer commands for format, lint, test, and build.
+- [x] Add initial README with local build/run basics.
+- [x] Implement `mba-player` as a minimal daemon with:
+  - [x] config loading
+  - [x] logging
+  - [x] `GET /api/v1/status`
+  - [x] static placeholder response identifying version/build info
+  - [x] HTTP/WebSocket port `8090`
+  - [x] minimal placeholder web page served from the daemon
+- [x] Implement `mba-cli status` against local `mba-player`.
+- [x] Add protocol serialization tests.
 
 ## Phase 1: Early Yocto Image and Remote Deploy Loop
 
-- [ ] Add the pi-base layer/helpers from the `sparkle-duck-shared` repository.
-- [ ] Create Matchbox Audio Yocto layer.
-- [ ] Create image recipe using A/B root filesystems and shared `/data`.
-- [ ] Document the 64 GB card partition assumption:
-  - [ ] boot partition
-  - [ ] root filesystem A
-  - [ ] root filesystem B
-  - [ ] ext4 `/data` partition using the remaining space
-- [ ] Package minimal `mba-player`.
-- [ ] Package minimal `mba-cli`.
-- [ ] Add `mba-player.service`.
-- [ ] Include base networking, SSH, Avahi, NetworkManager, and BlueZ.
-- [ ] Create checked-in `config/hotspot.local.example.json`.
-- [ ] Define gitignored `config/hotspot.local.json`.
-- [ ] Create initial flash script.
-- [ ] Create remote deploy/update script that reuses pi-base helpers.
+- [x] Add the pi-base layer/helpers from the `sparkle-duck-shared` repository.
+- [x] Create Matchbox Audio Yocto layer.
+- [x] Create image recipe using A/B root filesystems and shared `/data`.
+- [x] Document the 64 GB card partition assumption:
+  - [x] boot partition
+  - [x] root filesystem A
+  - [x] root filesystem B
+  - [x] ext4 `/data` partition using the remaining space
+- [x] Package minimal `mba-player`.
+- [x] Package minimal `mba-cli`.
+- [x] Add `mba-player.service`.
+- [x] Include base networking, SSH, Avahi, NetworkManager, and BlueZ.
+- [x] Create checked-in `config/hotspot.local.example.json`.
+- [x] Define gitignored `config/hotspot.local.json`.
+- [x] Create initial flash script.
+- [x] Create remote deploy/update script that reuses pi-base helpers.
 - [ ] Flash the Pi and verify:
   - [ ] SSH works
   - [ ] `mba-player.service` starts
