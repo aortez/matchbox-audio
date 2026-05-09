@@ -12,12 +12,23 @@ import {
 const DEFAULT_HOST = 'matchbox-audio.local';
 const DEFAULT_USER = 'matchbox';
 
-function argValue(args, name, fallback) {
-  const index = args.indexOf(name);
-  if (index === -1) {
-    return fallback;
+function argValue(args, names, fallback) {
+  const aliases = Array.isArray(names) ? names : [names];
+
+  for (const name of aliases) {
+    const index = args.indexOf(name);
+    if (index !== -1) {
+      return args[index + 1] || fallback;
+    }
+
+    const prefix = `${name}=`;
+    const inline = args.find(arg => arg.startsWith(prefix));
+    if (inline) {
+      return inline.slice(prefix.length) || fallback;
+    }
   }
-  return args[index + 1] || fallback;
+
+  return fallback;
 }
 
 function showHelp() {
@@ -28,9 +39,10 @@ Usage:
   npm run smoke [options]
 
 Options:
-  --host <host>   Hostname or IP address (default: ${DEFAULT_HOST})
-  --user <user>   SSH user (default: ${DEFAULT_USER})
-  -h, --help      Show this help
+  --host <host>     Hostname or IP address (default: ${DEFAULT_HOST})
+  --target <host>   Alias for --host, matching update.sh
+  --user <user>     SSH user (default: ${DEFAULT_USER})
+  -h, --help        Show this help
 `);
 }
 
@@ -59,7 +71,7 @@ function main() {
     return;
   }
 
-  const host = argValue(args, '--host', DEFAULT_HOST);
+  const host = argValue(args, ['--host', '--target'], DEFAULT_HOST);
   const user = argValue(args, '--user', DEFAULT_USER);
   const remoteTarget = `${user}@${host}`;
 

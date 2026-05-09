@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'child_process';
-import { createReadStream, createWriteStream, mkdtempSync, rmSync, statSync } from 'fs';
+import { createReadStream, createWriteStream, existsSync, mkdtempSync, readdirSync, rmSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, dirname, join } from 'path';
 import { pipeline } from 'stream/promises';
@@ -15,15 +15,18 @@ import {
   error,
   findLatestImage,
   formatBytes,
+  getRemoteTmpSpace,
   info,
   loadConfig,
   log,
   remoteFlashWithKey,
   run,
   runCapture,
+  ssh,
   success,
   transferImage,
   verifyRemoteChecksum,
+  warn,
   waitForReboot,
 } from '../pi-base/scripts/lib/index.mjs';
 
@@ -35,17 +38,37 @@ const DEFAULT_HOST = 'matchbox-audio.local';
 const DEFAULT_USER = 'matchbox';
 const SSH_USERNAME = 'matchbox';
 const REMOTE_UPDATE_DIR = '/data/matchbox-audio/update';
-const PREFERRED_IMAGES = [
+const REMOTE_UPDATE_HEADROOM_BYTES = 64 * 1024 * 1024;
+const LOCAL_UPDATE_SCRIPT = join(
+  YOCTO_DIR,
+  'pi-base/yocto/meta-pi-base/recipes-support/ab-boot/files/ab-update-with-key',
+);
+const PREFERRED_ROOTFS_IMAGES = [
+  'matchbox-audio-image-raspberrypi0-2w.rootfs.ext4.gz',
+  'matchbox-audio-image-raspberrypi0-2w.ext4.gz',
+];
+const PREFERRED_WIC_IMAGES = [
   'matchbox-audio-image-raspberrypi0-2w.rootfs.wic.gz',
   'matchbox-audio-image-raspberrypi0-2w.wic.gz',
 ];
 
-function argValue(args, name, fallback) {
-  const index = args.indexOf(name);
-  if (index === -1) {
-    return fallback;
+function argValue(args, names, fallback) {
+  const aliases = Array.isArray(names) ? names : [names];
+
+  for (const name of aliases) {
+    const index = args.indexOf(name);
+    if (index !== -1) {
+      return args[index + 1] || fallback;
+    }
+
+    const prefix = `${name}=`;
+    const inline = args.find(arg => arg.startsWith(prefix));
+    if (inline) {
+      return inline.slice(prefix.length) || fallback;
+    }
   }
-  return args[index + 1] || fallback;
+
+  return fallback;
 }
 
 function showHelp() {
@@ -54,16 +77,80 @@ Matchbox Audio Remote Update
 
 Usage:
   npm run update [options]
+  ./update.sh [options]
 
 Options:
-  --host <host>    Hostname or IP address (default: ${DEFAULT_HOST})
-  --user <user>    SSH user (default: ${DEFAULT_USER})
-  --skip-build     Reuse latest built image
-  --dry-run        Show planned work without changing the device
-  --yes            Skip final A/B update confirmation
-  --no-wait        Do not wait for reboot after update
-  -h, --help       Show this help
+  --host <host>       Hostname or IP address (default: ${DEFAULT_HOST})
+  --target <host>     Alias for --host, matching the dirtsim wrapper
+  --user <user>       SSH user (default: ${DEFAULT_USER})
+  --skip-build        Reuse latest built image
+  --dry-run           Show planned work without changing the device
+  --yes               Skip final A/B update confirmation
+  --no-wait           Do not wait for reboot after update
+  --smoke             Run the remote smoke test after reboot
+  -h, --help          Show this help
 `);
+}
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`;
+}
+
+function findLatestImageInDirs(dirs, suffix, preferredNames = []) {
+  const files = [];
+
+  for (const dir of dirs) {
+    if (!existsSync(dir)) {
+      continue;
+    }
+
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith(suffix) || name.includes('->')) {
+        continue;
+      }
+
+      const path = join(dir, name);
+      files.push({ name, path, stat: statSync(path) });
+    }
+  }
+
+  files.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
+
+  for (const preferred of preferredNames) {
+    const found = files.find(file => file.name === preferred);
+    if (found) {
+      return found;
+    }
+  }
+
+  return files[0] || null;
+}
+
+function findImageWorkDeployDirs() {
+  const deployRoot = join(YOCTO_DIR, 'build/tmp/work');
+  const matches = [];
+
+  function visit(dir, depth) {
+    if (depth > 6 || !existsSync(dir)) {
+      return;
+    }
+
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (!entry.isDirectory()) {
+        continue;
+      }
+
+      if (entry.name === 'deploy-matchbox-audio-image-image-complete') {
+        matches.push(path);
+      } else {
+        visit(path, depth + 1);
+      }
+    }
+  }
+
+  visit(deployRoot, 0);
+  return matches;
 }
 
 async function ensureSshKeyConfig() {
@@ -151,6 +238,145 @@ async function prepareRootfsForRemoteUpdate(imagePath) {
   }
 }
 
+function findUpdateImage() {
+  const rootfs = findLatestImageInDirs(
+    [IMAGE_DIR, ...findImageWorkDeployDirs()],
+    '.ext4.gz',
+    PREFERRED_ROOTFS_IMAGES,
+  );
+  const wic = findLatestImage(IMAGE_DIR, '.wic.gz', PREFERRED_WIC_IMAGES);
+
+  if (rootfs && wic && rootfs.stat.mtimeMs + 5 * 60 * 1000 < wic.stat.mtimeMs) {
+    warn('Standalone rootfs is older than the latest WIC image; using WIC-derived rootfs.');
+    return { ...wic, kind: 'wic' };
+  }
+
+  if (rootfs) {
+    return { ...rootfs, kind: 'rootfs' };
+  }
+
+  if (wic) {
+    return { ...wic, kind: 'wic' };
+  }
+
+  return null;
+}
+
+async function prepareUpdatePayload(image) {
+  if (image.kind === 'rootfs') {
+    info('Using standalone rootfs artifact.');
+    return { preparedRootfsPath: image.path, workDir: null };
+  }
+
+  return prepareRootfsForRemoteUpdate(image.path);
+}
+
+function requireRemoteOk(remoteTarget, command, failureMessage) {
+  const output = ssh(remoteTarget, command, { timeout: 10 });
+  if (output === null) {
+    throw new Error(failureMessage);
+  }
+  return output;
+}
+
+function preflightRemote(remoteTarget) {
+  info('Checking SSH reachability...');
+  const reachable = ssh(remoteTarget, 'echo ok', { timeout: 10 });
+  if (reachable !== 'ok') {
+    throw new Error(`Cannot reach ${remoteTarget} over SSH.`);
+  }
+  success('SSH reachable.');
+
+  info('Checking /data mount...');
+  const dataFs = requireRemoteOk(
+    remoteTarget,
+    "grep ' /data ' /proc/mounts | awk '{ print \\$3 }'",
+    'Could not verify /data mount on remote device.',
+  );
+  if (dataFs !== 'ext4') {
+    throw new Error(`/data must be mounted as ext4 before updating; got "${dataFs || 'not mounted'}".`);
+  }
+  success('/data is mounted as ext4.');
+
+  info('Preparing remote update directory...');
+  const quotedDir = shellQuote(REMOTE_UPDATE_DIR);
+  const updateDir = requireRemoteOk(
+    remoteTarget,
+    `mkdir -p ${quotedDir} && test -d ${quotedDir} && test -w ${quotedDir} && echo ok`,
+    `Failed to prepare writable remote update directory ${REMOTE_UPDATE_DIR}.`,
+  );
+  if (updateDir !== 'ok') {
+    throw new Error(`Remote update directory ${REMOTE_UPDATE_DIR} is not writable.`);
+  }
+  success(`Remote update directory ready: ${REMOTE_UPDATE_DIR}`);
+
+  info('Checking A/B boot manager...');
+  const slotStatus = requireRemoteOk(
+    remoteTarget,
+    'ab-boot-manager status',
+    'Remote device does not appear to have ab-boot-manager available.',
+  );
+  log(slotStatus);
+  success('A/B boot manager ready.');
+}
+
+function verifyRemoteSpace(remoteTarget, payloadSize) {
+  info('Checking remote update space...');
+  const remoteSpace = getRemoteTmpSpace(remoteTarget, REMOTE_UPDATE_DIR);
+  const required = payloadSize + REMOTE_UPDATE_HEADROOM_BYTES;
+
+  if (remoteSpace <= 0) {
+    throw new Error(`Could not determine available space in ${REMOTE_UPDATE_DIR}.`);
+  }
+
+  if (remoteSpace < required) {
+    throw new Error(
+      `Not enough space in ${REMOTE_UPDATE_DIR}. ` +
+        `Need ${formatBytes(required)} including headroom, have ${formatBytes(remoteSpace)}.`,
+    );
+  }
+
+  success(`Remote has enough space (${formatBytes(remoteSpace)} available).`);
+}
+
+async function ensureRemoteUpdateScript(remoteTarget) {
+  const existing = ssh(remoteTarget, 'command -v ab-update-with-key', { timeout: 10 });
+  if (existing) {
+    info(`Remote update helper: ${existing}`);
+    return 'ab-update-with-key';
+  }
+
+  if (!existsSync(LOCAL_UPDATE_SCRIPT)) {
+    throw new Error(`Local update helper not found: ${LOCAL_UPDATE_SCRIPT}`);
+  }
+
+  info('ab-update-with-key not found on target; transferring bootstrap helper...');
+  const remoteScriptPath = `${REMOTE_UPDATE_DIR}/ab-update-with-key`;
+  await run('scp', [
+    '-o',
+    'ConnectTimeout=10',
+    '-o',
+    'BatchMode=yes',
+    LOCAL_UPDATE_SCRIPT,
+    `${remoteTarget}:${remoteScriptPath}`,
+  ]);
+  await run('ssh', [
+    '-o',
+    'ConnectTimeout=10',
+    '-o',
+    'BatchMode=yes',
+    remoteTarget,
+    `chmod 755 ${shellQuote(remoteScriptPath)}`,
+  ]);
+  success('Remote update helper transferred.');
+  return remoteScriptPath;
+}
+
+async function runSmokeTest(host, user) {
+  info('Running remote smoke test...');
+  await run('npm', ['run', 'smoke', '--', '--host', host, '--user', user], { cwd: YOCTO_DIR });
+}
+
 async function main() {
   const args = process.argv.slice(2);
 
@@ -159,13 +385,14 @@ async function main() {
     return;
   }
 
-  const host = argValue(args, '--host', DEFAULT_HOST);
+  const host = argValue(args, ['--host', '--target'], DEFAULT_HOST);
   const user = argValue(args, '--user', DEFAULT_USER);
   const remoteTarget = `${user}@${host}`;
   const skipBuild = args.includes('--skip-build');
   const dryRun = args.includes('--dry-run');
   const skipConfirm = args.includes('--yes');
   const noWait = args.includes('--no-wait');
+  const runSmoke = args.includes('--smoke');
 
   log('');
   log(`${colors.bold}${colors.cyan}Matchbox Audio Remote Update${colors.reset}`);
@@ -178,35 +405,42 @@ async function main() {
 
   const config = await ensureSshKeyConfig();
 
-  if (!skipBuild) {
-    info('Building image...');
-    await run('npm', ['run', 'build'], { cwd: YOCTO_DIR });
+  if (!dryRun) {
+    preflightRemote(remoteTarget);
+    log('');
   }
 
-  const image = findLatestImage(IMAGE_DIR, '.wic.gz', PREFERRED_IMAGES);
+  if (!skipBuild) {
+    info('Building remote update payload...');
+    await run('npm', ['run', 'build', '--', '--update-payload'], { cwd: YOCTO_DIR });
+  }
+
+  const image = findUpdateImage();
   if (!image) {
     throw new Error('No image found. Run "npm run build" first.');
   }
 
   info(`Image: ${image.name}`);
+  info(`Image type: ${image.kind === 'rootfs' ? 'rootfs payload' : 'WIC image'}`);
   info(`Size: ${formatBytes(image.stat.size)}`);
 
   let prepared = null;
   try {
     if (dryRun) {
-      info('Would prepare rootfs image from WIC.');
+      if (image.kind === 'rootfs') {
+        info('Would transfer standalone rootfs artifact.');
+      } else {
+        info('Would prepare rootfs image from WIC.');
+      }
+      info(`Would create ${REMOTE_UPDATE_DIR}, check /data and free space, transfer payload, flash inactive slot, and reboot.`);
       return;
     }
 
-    prepared = await prepareRootfsForRemoteUpdate(image.path);
-    const checksum = await calculateChecksum(prepared.preparedRootfsPath);
+    prepared = await prepareUpdatePayload(image);
+    const payloadSize = statSync(prepared.preparedRootfsPath).size;
+    verifyRemoteSpace(remoteTarget, payloadSize);
 
-    const mkdirResult = runCapture(
-      `ssh -o ConnectTimeout=10 -o BatchMode=yes ${remoteTarget} "mkdir -p ${REMOTE_UPDATE_DIR}"`,
-    );
-    if (mkdirResult === null) {
-      throw new Error(`Failed to create remote update directory ${REMOTE_UPDATE_DIR}.`);
-    }
+    const checksum = await calculateChecksum(prepared.preparedRootfsPath);
 
     const transfer = await transferImage(
       prepared.preparedRootfsPath,
@@ -229,6 +463,8 @@ async function main() {
       `${remoteTarget}:${remoteKeyPath}`,
     ]);
 
+    const remoteUpdateScript = await ensureRemoteUpdateScript(remoteTarget);
+
     await remoteFlashWithKey(
       transfer.remoteImagePath,
       remoteKeyPath,
@@ -236,18 +472,27 @@ async function main() {
       remoteTarget,
       false,
       skipConfirm,
+      remoteUpdateScript,
     );
 
     if (!noWait) {
-      await waitForReboot(remoteTarget, host, 0, 180);
+      const rebooted = await waitForReboot(remoteTarget, host, 0, 180);
+      if (!rebooted) {
+        throw new Error(`Timed out waiting for ${host} to reboot.`);
+      }
       runCapture(
         `ssh -o ConnectTimeout=10 -o BatchMode=yes ${remoteTarget} "rm -f ${transfer.remoteImagePath} ${transfer.remoteChecksumPath} ${remoteKeyPath}"`,
       );
+      if (runSmoke) {
+        await runSmokeTest(host, user);
+      }
+    } else if (runSmoke) {
+      warn('--smoke requested, but --no-wait prevents running the smoke test.');
     }
 
     success('Remote update complete.');
   } finally {
-    if (prepared) {
+    if (prepared?.workDir) {
       rmSync(prepared.workDir, { recursive: true, force: true });
     }
   }

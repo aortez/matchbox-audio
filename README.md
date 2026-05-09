@@ -25,6 +25,7 @@ make fmt
 make lint
 make test
 make build
+make yocto-update
 ```
 
 The Makefile uses the `CARGO` variable, so a non-default toolchain can be used
@@ -71,3 +72,13 @@ cargo run -p mba-cli -- --server http://127.0.0.1:8090 status
 
 Command-line `--bind` overrides the config file.
 
+## Remote Device Update
+
+After the device has been flashed once and is reachable over SSH:
+
+```sh
+./update.sh --skip-build --smoke
+```
+
+Use `--target <host>` for a different device. The wrapper performs a full Yocto
+A/B rootfs update and preserves `/data`.

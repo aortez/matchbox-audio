@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'child_process';
-import { existsSync, mkdirSync, readdirSync, rmSync, symlinkSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, symlinkSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -29,8 +29,9 @@ Usage:
   npm run build [options]
 
 Options:
-  --clean      Clean image sstate before building
-  -h, --help   Show this help
+  --clean           Clean image sstate before building
+  --update-payload  Build only the ext4 rootfs payload for remote A/B update
+  -h, --help        Show this help
 `);
 }
 
@@ -101,8 +102,39 @@ function bitbakeCommand(command, hosttoolsPath) {
   return `export PATH=${shellQuote(hosttoolsPath)}:$PATH; ${command}`;
 }
 
+function findLatestExt4Payload() {
+  const deployRoot = join(YOCTO_DIR, 'build/tmp/work');
+  const matches = [];
+
+  function visit(dir, depth) {
+    if (depth > 6 || !existsSync(dir)) {
+      return;
+    }
+
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === 'deploy-matchbox-audio-image-image-complete') {
+          for (const artifact of readdirSync(path)) {
+            if (artifact.endsWith('.ext4.gz')) {
+              const artifactPath = join(path, artifact);
+              matches.push({ path: artifactPath, stat: statSync(artifactPath) });
+            }
+          }
+        } else {
+          visit(path, depth + 1);
+        }
+      }
+    }
+  }
+
+  visit(deployRoot, 0);
+  return matches.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs)[0] || null;
+}
+
 async function main() {
   const args = process.argv.slice(2);
+  const updatePayload = args.includes('--update-payload');
 
   if (args.includes('-h') || args.includes('--help')) {
     showHelp();
@@ -114,6 +146,9 @@ async function main() {
   log('');
   info('Target: Raspberry Pi Zero 2 W');
   info(`KAS config: ${KAS_FILE}`);
+  if (updatePayload) {
+    info('Mode: remote update payload only');
+  }
   log('');
 
   const { env, hosttoolsPath } = prepareBuildEnv();
@@ -127,15 +162,23 @@ async function main() {
     success('Clean complete.');
   }
 
-  info('Starting build...');
-  await run('kas', ['shell', KAS_FILE, '-c', bitbakeCommand(`bitbake -c build ${IMAGE_NAME}`, hosttoolsPath)], {
+  const task = updatePayload ? 'image_ext4' : 'build';
+  info(updatePayload ? 'Building ext4 rootfs payload...' : 'Starting build...');
+  await run('kas', ['shell', KAS_FILE, '-c', bitbakeCommand(`bitbake -c ${task} ${IMAGE_NAME}`, hosttoolsPath)], {
     cwd: YOCTO_DIR,
     env,
   });
 
   log('');
   success('Build complete.');
-  info('Image directory: build/tmp/deploy/images/raspberrypi0-2w/');
+  if (updatePayload) {
+    const payload = findLatestExt4Payload();
+    if (payload) {
+      info(`Payload: ${payload.path}`);
+    }
+  } else {
+    info('Image directory: build/tmp/deploy/images/raspberrypi0-2w/');
+  }
 }
 
 main().catch(err => {

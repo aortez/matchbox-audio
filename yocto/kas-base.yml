@@ -44,7 +44,7 @@ local_conf_header:
     INIT_MANAGER = "systemd"
     hostname:pn-base-files = "matchbox-audio"
 
-    IMAGE_FSTYPES = "wic.gz wic.bmap tar.gz"
+    IMAGE_FSTYPES = "wic.gz wic.bmap ext4.gz tar.gz"
     WKS_FILE = "sdimage-ab.wks.in"
 
     BOOT_DEVICE = "mmcblk0"

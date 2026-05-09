@@ -1,6 +1,6 @@
 CARGO ?= cargo
 
-.PHONY: fmt lint test build run-player status yocto-build yocto-flash yocto-smoke
+.PHONY: fmt lint test build run-player status yocto-build yocto-flash yocto-update yocto-smoke
 
 fmt:
 	$(CARGO) fmt --all
@@ -25,6 +25,9 @@ yocto-build:
 
 yocto-flash:
 	cd yocto && npm run flash
+
+yocto-update:
+	./update.sh
 
 yocto-smoke:
 	cd yocto && npm run smoke

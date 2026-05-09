@@ -12,6 +12,12 @@ The first target is Raspberry Pi Zero 2 W:
 npm run build
 ```
 
+Remote updates only need a rootfs payload, so the update script uses:
+
+```sh
+npm run build -- --update-payload
+```
+
 The build host must provide GNU coreutils. On Ubuntu variants where unprefixed
 coreutils come from uutils, install `gnu-coreutils`; the build script will
 automatically prefer the `gnu*` binaries for BitBake host tools.
@@ -20,6 +26,7 @@ The build uses `kas-matchbox-audio-zero2.yml` and creates:
 
 - A/B root filesystems
 - persistent `/data`
+- a standalone `ext4.gz` rootfs payload for remote A/B updates
 - NetworkManager, Avahi, BlueZ, and SSH
 - `mba-player.service`
 - `mba-cli`
@@ -77,8 +84,26 @@ npm run smoke -- --host 192.168.1.42 --user matchbox
 After a device has already been flashed once:
 
 ```sh
-npm run update
+../update.sh --skip-build --smoke
 ```
 
-This prepares the root filesystem from the latest WIC image, transfers it to the
-device, flashes the inactive rootfs via `ab-update-with-key`, and reboots.
+The top-level wrapper defaults to `matchbox-audio.local` and skips the final
+flash confirmation, matching the dirtsim update wrapper. Use `--confirm` if you
+want the interactive prompt.
+
+The updater builds and prefers the standalone `ext4.gz` rootfs payload, avoiding
+full WIC SD-card image creation for the remote update path. If only a WIC image
+is available, it extracts the rootfs payload locally without sudo. Before
+transfer it checks SSH reachability, verifies `/data` is mounted as ext4,
+prepares `/data/matchbox-audio/update`, checks available space, and verifies
+`ab-boot-manager` on the target. It then transfers the payload, verifies the
+checksum, bootstraps `ab-update-with-key` if needed, flashes the inactive slot,
+injects the configured SSH key, reboots, and optionally runs the smoke test.
+
+Useful variants:
+
+```sh
+../update.sh --target 192.168.1.42 --skip-build
+../update.sh --target matchbox-audio.local --skip-build --smoke
+npm run update -- --host matchbox-audio.local --skip-build --yes
+```
