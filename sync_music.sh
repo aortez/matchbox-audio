@@ -85,9 +85,7 @@ fi
 
 REMOTE_TARGET="${REMOTE_USER}@${REMOTE_HOST}"
 REMOTE_DEST="${REMOTE_TARGET}:${DEST_DIR%/}/"
-REMOTE_PREPARE="sudo -n mkdir -p $(shell_quote "$DEST_DIR")"
-REMOTE_PREPARE+=" && sudo -n chown $(shell_quote "$REMOTE_USER:$REMOTE_USER")"
-REMOTE_PREPARE+=" $(shell_quote "$DEST_DIR")"
+REMOTE_PREPARE="mkdir -p $(shell_quote "$DEST_DIR")"
 
 RSYNC_ARGS=(
     -az

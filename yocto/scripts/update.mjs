@@ -295,6 +295,26 @@ function requireRemoteOk(remoteTarget, command, failureMessage) {
 
 function ensureRemoteBootConfig(remoteTarget) {
   info('Checking Pirate Audio boot config...');
+  const helper = requireRemoteOk(
+    remoteTarget,
+    'command -v mba-boot-config || true',
+    'Could not check for mba-boot-config on the remote device.',
+  );
+  if (helper) {
+    const output = requireRemoteOk(
+      remoteTarget,
+      `sudo -n ${shellQuote(helper)} ensure-pirate-audio`,
+      'Could not update /boot/config.txt for Pirate Audio hardware.',
+    );
+    if (output.includes('changed=1')) {
+      success('Pirate Audio boot config updated.');
+    } else {
+      success('Pirate Audio boot config already present.');
+    }
+    return;
+  }
+
+  warn('Remote mba-boot-config helper not found; using legacy sudo boot-config update.');
   const quotedLines = PIRATE_AUDIO_BOOT_CONFIG_LINES
     .map(line => shellQuote(line))
     .join(' ');
@@ -360,13 +380,13 @@ function preflightRemote(remoteTarget) {
 
   const bootReady = requireRemoteOk(
     remoteTarget,
-    'sudo -n test -f /boot/cmdline.txt && sudo -n test -w /boot/cmdline.txt && sudo -n test -f /boot/config.txt && sudo -n test -w /boot/config.txt && echo ok',
-    'Could not verify writable /boot with cmdline.txt and config.txt.',
+    'test -f /boot/cmdline.txt && test -f /boot/config.txt && echo ok',
+    'Could not verify /boot has cmdline.txt and config.txt.',
   );
   if (bootReady !== 'ok') {
-    throw new Error('/boot must be mounted and writable before updating.');
+    throw new Error('/boot must be mounted with cmdline.txt and config.txt before updating.');
   }
-  success(`/boot is mounted and writable: ${bootSource} (${bootFs}).`);
+  success(`/boot is mounted: ${bootSource} (${bootFs}).`);
 
   info('Preparing remote update directory...');
   const quotedDir = shellQuote(REMOTE_UPDATE_DIR);
@@ -409,10 +429,31 @@ function verifyRemoteSpace(remoteTarget, payloadSize) {
   success(`Remote has enough space (${formatBytes(remoteSpace)} available).`);
 }
 
+function removeStaleRemoteUpdateFiles(remoteTarget, paths) {
+  if (paths.length === 0) {
+    return;
+  }
+
+  info('Removing stale remote update artifacts...');
+  const quotedPaths = paths.map(path => shellQuote(path)).join(' ');
+  requireRemoteOk(
+    remoteTarget,
+    `rm -f ${quotedPaths}`,
+    'Could not remove stale remote update artifacts.',
+  );
+  success('Stale remote update artifacts removed.');
+}
+
 async function ensureRemoteUpdateScript(remoteTarget) {
+  const wrapper = ssh(remoteTarget, 'command -v mba-ab-update', { timeout: 10 });
+  if (wrapper) {
+    info(`Remote update helper: ${wrapper}`);
+    return wrapper;
+  }
+
   const existing = ssh(remoteTarget, 'command -v ab-update-with-key', { timeout: 10 });
   if (existing) {
-    info(`Remote update helper: ${existing}`);
+    info(`Remote update helper: ${existing} (legacy bootstrap path)`);
     return 'ab-update-with-key';
   }
 
@@ -512,6 +553,14 @@ async function main() {
     ensureRemoteBootConfig(remoteTarget);
 
     const checksum = await calculateChecksum(prepared.preparedRootfsPath);
+    const remoteImagePath = `${REMOTE_UPDATE_DIR}/${basename(prepared.preparedRootfsPath)}`;
+    const remoteChecksumPath = `${remoteImagePath}.sha256`;
+    const remoteKeyPath = `${REMOTE_UPDATE_DIR}/${basename(config.ssh_key_path)}`;
+    removeStaleRemoteUpdateFiles(remoteTarget, [
+      remoteImagePath,
+      remoteChecksumPath,
+      remoteKeyPath,
+    ]);
 
     const transfer = await transferImage(
       prepared.preparedRootfsPath,
@@ -524,7 +573,6 @@ async function main() {
       throw new Error('Remote checksum verification failed.');
     }
 
-    const remoteKeyPath = `${REMOTE_UPDATE_DIR}/${basename(config.ssh_key_path)}`;
     await run('scp', [
       '-o',
       'ConnectTimeout=10',
@@ -535,6 +583,7 @@ async function main() {
     ]);
 
     const remoteUpdateScript = await ensureRemoteUpdateScript(remoteTarget);
+    const sudoRemoteUpdateScript = `sudo -n ${shellQuote(remoteUpdateScript)}`;
 
     await remoteFlashWithKey(
       transfer.remoteImagePath,
@@ -543,7 +592,7 @@ async function main() {
       remoteTarget,
       false,
       skipConfirm,
-      remoteUpdateScript,
+      sudoRemoteUpdateScript,
     );
 
     if (!noWait) {

@@ -296,7 +296,7 @@ struct NetworkStatus {
 }
 
 fn network_status(network_script: &str) -> Result<NetworkStatus> {
-    let output = run_network_command(network_script, "status")?;
+    let output = run_network_command(network_script, "display-status")?;
     Ok(NetworkStatus {
         mode: NetworkMode::parse(parse_field(&output, "mode").unwrap_or("unknown")),
         active_connection: parse_field(&output, "active_connection")

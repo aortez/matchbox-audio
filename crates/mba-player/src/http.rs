@@ -74,20 +74,16 @@ async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
 }
 
 async fn read_network_status(network_script: &Path) -> Option<NetworkInfo> {
-    let stdout = match run_network_status_command(network_script, false).await {
+    let stdout = match run_network_status_command(network_script).await {
         Ok(stdout) => stdout,
-        Err(error) => match run_network_status_command(network_script, true).await {
-            Ok(stdout) => stdout,
-            Err(sudo_error) => {
-                warn!(
-                    %error,
-                    %sudo_error,
-                    path = %network_script.display(),
-                    "network status helper failed"
-                );
-                return None;
-            }
-        },
+        Err(error) => {
+            warn!(
+                %error,
+                path = %network_script.display(),
+                "network status helper failed"
+            );
+            return None;
+        }
     };
 
     Some(NetworkInfo {
@@ -103,14 +99,8 @@ async fn read_network_status(network_script: &Path) -> Option<NetworkInfo> {
     })
 }
 
-async fn run_network_status_command(network_script: &Path, sudo: bool) -> Result<String, String> {
-    let mut command = if sudo {
-        let mut command = Command::new("sudo");
-        command.arg("-n").arg(network_script);
-        command
-    } else {
-        Command::new(network_script)
-    };
+async fn run_network_status_command(network_script: &Path) -> Result<String, String> {
+    let mut command = Command::new(network_script);
     command.arg("status");
 
     let output = match timeout(Duration::from_secs(5), command.output()).await {

@@ -1,7 +1,7 @@
 [Unit]
 Description=Matchbox Audio device display and buttons
-After=NetworkManager.service data.mount mba-network-mode-restore.service
-Wants=NetworkManager.service data.mount
+After=NetworkManager.service data.mount mba-data-init.service mba-network-mode-restore.service
+Wants=NetworkManager.service data.mount mba-data-init.service
 
 [Service]
 Type=simple
@@ -10,6 +10,10 @@ Restart=always
 RestartSec=3
 User=root
 Environment=RUST_LOG=mba_device=info,warn
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
 
 [Install]
 WantedBy=multi-user.target
