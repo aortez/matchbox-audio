@@ -144,8 +144,8 @@ home mode.
 - [x] Stop exposing hotspot password in unauthenticated status by default, or
   gate it behind a local/admin-only path.
 - [x] Add minimal systemd hardening for services where practical.
-- [ ] Verify remote deploy, `mba-cli status`, button network switching, MPD, and
-  library access after permission tightening.
+- [x] Verify remote deploy, `mba-cli status`, button network switching, and
+  library access after permission tightening. MPD is deferred to Phase 3.
 
 Phase 2.5 rationale: the Phase 1/2 image intentionally uses a development
 posture: SSH key login as `matchbox`, a local-console recovery password, and
@@ -153,6 +153,25 @@ full passwordless sudo for fast bring-up. Before adding MPD, library browsing,
 and write-heavy app state, tighten this into explicit service boundaries so
 network control, hardware access, playback state, and user music do not all
 share the same privilege level.
+
+Phase 2.5 verification note: on May 9, 2026, the hardened image was deployed to
+`matchbox-audio.local` and `npm run hardening` passed against the device. The
+suite asserts service activation, the public `/api/v1/status` payload omits
+`hotspot_password`, `mba-network-mode status` is reachable without sudo and
+also omits the password, `mba-network-mode display-status` is denied for
+`matchbox` (the secret file is unreadable), `/data` directory ownership and
+modes match the Phase 2.5 layout
+(`/data/matchbox-audio` `root:root 0711`, `/data/matchbox-audio/state`
+`mba-player:matchbox-audio 0750`, `/data/matchbox-audio/network`
+`root:matchbox-audio 0750`, `/data/matchbox-audio/update` and `/data/music`
+`matchbox:matchbox`), the sudo allowlist denies plain `sudo`, shell `sudo`,
+shadow reads, and `sudo journalctl` while still allowing
+`mba-boot-config ensure-pirate-audio` and the network-mode commands, and the
+`matchbox` user reads the journal through `systemd-journal` group membership.
+Button-driven network switching is wired through
+`sudo mba-network-mode toggle`, which is in the allowlist and was sanity
+checked via `sudo -n -l`. MPD coverage is deferred to Phase 3 once the daemon
+lands.
 
 ## Phase 3: MPD on Target
 

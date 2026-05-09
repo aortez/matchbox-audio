@@ -147,6 +147,9 @@ function main() {
   expectFail(remoteTarget, 'sudo journalctl is denied', 'sudo -n journalctl -n 1');
   expectOk(remoteTarget, 'journal is readable without sudo', 'id -nG | grep -qw systemd-journal && journalctl --no-pager -n 1 >/dev/null');
   expectOk(remoteTarget, 'boot config helper is allowed', 'sudo -n /usr/bin/mba-boot-config ensure-pirate-audio');
+  expectOk(remoteTarget, 'ab-update with update-dir paths and matchbox user is allowed', 'sudo -n -l /usr/sbin/ab-update-with-key /data/matchbox-audio/update/probe /data/matchbox-audio/update/key.pub matchbox >/dev/null');
+  expectFail(remoteTarget, 'ab-update outside update dir is denied', 'sudo -n -l /usr/sbin/ab-update-with-key /tmp/x /tmp/y matchbox >/dev/null 2>&1');
+  expectFail(remoteTarget, 'ab-update with non-matchbox user is denied', 'sudo -n -l /usr/sbin/ab-update-with-key /data/matchbox-audio/update/x /data/matchbox-audio/update/y root >/dev/null 2>&1');
 
   expectRemoteValue(remoteTarget, 'app data directory mode', 'stat -c %U:%G:%a /data/matchbox-audio', 'root:root:711');
   expectRemoteValue(remoteTarget, 'app state directory mode', 'stat -c %U:%G:%a /data/matchbox-audio/state', 'mba-player:matchbox-audio:750');
