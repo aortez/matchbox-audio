@@ -17,7 +17,7 @@ use serde::Deserialize;
 use tokio::{process::Command, time::timeout};
 use tracing::warn;
 
-use crate::mpd::{MpdError, MpdHandle};
+use crate::mpd::{MpdError, MpdHandle, QueuePlaybackTarget};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
 const APP_CSS: &str = include_str!("../web/app.css");
@@ -47,6 +47,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/library", get(library))
         .route("/api/v1/library/rescan", post(rescan))
         .route("/api/v1/queue", get(queue).delete(clear_queue))
+        .route("/api/v1/queue/play", post(play_queue_item))
         .route("/api/v1/queue/files", post(enqueue_file))
         .route("/api/v1/queue/directories", post(enqueue_directory))
         .with_state(state)
@@ -189,6 +190,31 @@ async fn enqueue_directory(
 async fn clear_queue(State(state): State<AppState>) -> Result<StatusCode, ApiError> {
     state.mpd.clear_queue().await?;
     Ok(StatusCode::ACCEPTED)
+}
+
+#[derive(Debug, Deserialize)]
+struct QueuePlayRequest {
+    id: Option<u64>,
+    position: Option<u32>,
+}
+
+async fn play_queue_item(
+    State(state): State<AppState>,
+    Json(req): Json<QueuePlayRequest>,
+) -> Result<StatusCode, ApiError> {
+    let target = queue_play_target(req)?;
+    state.mpd.play_queue_item(target).await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+fn queue_play_target(req: QueuePlayRequest) -> Result<QueuePlaybackTarget, ApiError> {
+    if let Some(id) = req.id {
+        return Ok(QueuePlaybackTarget::Id(id));
+    }
+    if let Some(position) = req.position {
+        return Ok(QueuePlaybackTarget::Position(position));
+    }
+    Err(ApiError::bad_request("id or position is required"))
 }
 
 fn validate_queue_path(path: String) -> Result<String, ApiError> {
@@ -343,5 +369,38 @@ mod tests {
                 "expected {path:?} to be rejected"
             );
         }
+    }
+
+    #[test]
+    fn queue_play_target_prefers_stable_id() {
+        assert_eq!(
+            queue_play_target(QueuePlayRequest {
+                id: Some(42),
+                position: Some(3),
+            })
+            .expect("target"),
+            QueuePlaybackTarget::Id(42)
+        );
+    }
+
+    #[test]
+    fn queue_play_target_accepts_position_fallback() {
+        assert_eq!(
+            queue_play_target(QueuePlayRequest {
+                id: None,
+                position: Some(3),
+            })
+            .expect("target"),
+            QueuePlaybackTarget::Position(3)
+        );
+    }
+
+    #[test]
+    fn queue_play_target_rejects_empty_request() {
+        assert!(queue_play_target(QueuePlayRequest {
+            id: None,
+            position: None,
+        })
+        .is_err());
     }
 }

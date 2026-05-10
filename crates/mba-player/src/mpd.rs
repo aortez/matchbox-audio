@@ -53,6 +53,7 @@ enum Action {
     Previous,
     Seek { seconds: f64 },
     SetVolume { level: u8 },
+    PlayQueue(QueuePlaybackTarget),
 }
 
 #[derive(Debug)]
@@ -102,6 +103,12 @@ impl Request {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueuePlaybackTarget {
+    Id(u64),
+    Position(u32),
+}
+
 #[derive(Clone)]
 pub struct MpdHandle {
     state: watch::Receiver<Option<PlaybackInfo>>,
@@ -143,6 +150,10 @@ impl MpdHandle {
 
     pub async fn set_volume(&self, level: u8) -> Result<(), MpdError> {
         self.send_action(Action::SetVolume { level }).await
+    }
+
+    pub async fn play_queue_item(&self, target: QueuePlaybackTarget) -> Result<(), MpdError> {
+        self.send_action(Action::PlayQueue(target)).await
     }
 
     pub async fn rescan(&self) -> Result<u64, MpdError> {
@@ -386,6 +397,18 @@ async fn handle_action(
             .command(commands::SetVolume(level.min(100)))
             .await
             .map_err(|e| e.to_string()),
+        Action::PlayQueue(target) => match target {
+            QueuePlaybackTarget::Id(id) => client
+                .command(commands::Play::song(commands::SongId(id)))
+                .await
+                .map_err(|e| e.to_string()),
+            QueuePlaybackTarget::Position(position) => client
+                .command(commands::Play::song(commands::SongPosition(
+                    position as usize,
+                )))
+                .await
+                .map_err(|e| e.to_string()),
+        },
     };
 
     match outcome {
@@ -545,20 +568,28 @@ fn playback_from(status: Status, current: Option<SongInQueue>) -> PlaybackInfo {
         PlayState::Paused => PlaybackState::Pause,
         PlayState::Stopped => PlaybackState::Stop,
     };
-    let track = current.map(|entry| {
-        let song = entry.song;
-        TrackInfo {
-            uri: song.url.clone(),
-            title: song.title().map(str::to_string),
-            artist: song.artists().first().cloned(),
-            album: song.album().map(str::to_string),
-            duration_s: song.duration.map(|d| d.as_secs() as u32),
-            elapsed_s: status.elapsed.map(|d| d.as_secs() as u32),
+    let (queue_position, queue_id, track) = match current {
+        Some(entry) => {
+            let queue_position = u32::try_from(entry.position.0).ok();
+            let queue_id = Some(entry.id.0);
+            let song = entry.song;
+            let track = TrackInfo {
+                uri: song.url.clone(),
+                title: song.title().map(str::to_string),
+                artist: song.artists().first().cloned(),
+                album: song.album().map(str::to_string),
+                duration_s: song.duration.map(|d| d.as_secs() as u32),
+                elapsed_s: status.elapsed.map(|d| d.as_secs() as u32),
+            };
+            (queue_position, queue_id, Some(track))
         }
-    });
+        None => (None, None, None),
+    };
     PlaybackInfo {
         state,
         volume: status.volume,
+        queue_position,
+        queue_id,
         queue_length: status.playlist_length as u32,
         track,
     }

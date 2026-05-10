@@ -214,6 +214,31 @@ h2 {
   background: var(--panel);
 }
 
+button.list-row {
+  width: 100%;
+  color: var(--text);
+  text-align: left;
+}
+
+.queue-row {
+  transition: border-color 140ms ease, background 140ms ease;
+}
+
+.queue-row:hover,
+.queue-row:focus-visible {
+  border-color: #55705f;
+  background: #1b211b;
+}
+
+.queue-row.current {
+  border-color: var(--accent);
+  background: #1a2d25;
+}
+
+.queue-row.current .row-title {
+  color: var(--accent-strong);
+}
+
 .list-row-main {
   min-width: 0;
 }

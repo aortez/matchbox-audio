@@ -222,8 +222,9 @@ landings so each step ends with a deployable, verified image.
   expose `play`/`pause`/`toggle`/`stop`/`next`/`previous`/`seek`/`volume`
   through the API and `mba-cli` (volume validates `0..=100` with no cap —
   the line-out has no equipment to protect), extend `/api/v1/status` with a
-  `playback {state, volume, track {uri, title, artist, album, duration_s,
-  elapsed_s} | null, queue_length}` subobject, and rework the PIM483 panel
+  `playback {state, volume, queue_position, queue_id, track {uri, title,
+  artist, album, duration_s, elapsed_s} | null, queue_length}` subobject, and
+  rework the PIM483 panel
   from a single column into three horizontal bands (network, now-playing,
   footer hint) so it doubles as a basic playback UI for hands-on use. The
   intended layout is captured below the landing list.
@@ -251,7 +252,9 @@ next. The queue backend also exposes `GET`/`DELETE /api/v1/queue`,
 `mba-cli queue`, `clear`, `enqueue`/`enqueue-file`, and `enqueue-dir` commands.
 The first-pass static web app is embedded in `mba-player` with no frontend build
 step: it provides status polling, transport controls, volume, library browsing,
-file/directory enqueue actions, and a queue view. Broader visual polish,
+file/directory enqueue actions, and a queue view. Queue rows can now jump
+directly to that queued item through `POST /api/v1/queue/play`, preferring
+MPD's stable queue id and falling back to position. Broader visual polish,
 search, and richer queue editing remain open.
 
 Landing C PIM483 display sketch:
@@ -414,6 +417,7 @@ support is deferred to Phase 4.
 - [x] Implement directory/file browser.
 - [x] Implement file and directory enqueue actions.
 - [x] Implement queue view.
+- [x] Implement queue item selection/playback.
 - [ ] Implement path search.
 - [ ] Verify the app works without internet access.
 - [ ] Verify the app over the Pi hotspot.

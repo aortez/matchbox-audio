@@ -147,6 +147,10 @@ pub struct PlaybackInfo {
     pub state: PlaybackState,
     pub volume: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub queue_position: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queue_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub track: Option<TrackInfo>,
     pub queue_length: u32,
 }
@@ -283,6 +287,8 @@ mod tests {
         let status = StatusResponse::ready("0.1.0", None::<String>).with_playback(PlaybackInfo {
             state: PlaybackState::Play,
             volume: 65,
+            queue_position: Some(2),
+            queue_id: Some(44),
             queue_length: 12,
             track: Some(TrackInfo {
                 uri: "_landing-b-test/test-tone.flac".to_string(),
@@ -298,6 +304,8 @@ mod tests {
 
         assert_eq!(json["playback"]["state"], "play");
         assert_eq!(json["playback"]["volume"], 65);
+        assert_eq!(json["playback"]["queue_position"], 2);
+        assert_eq!(json["playback"]["queue_id"], 44);
         assert_eq!(json["playback"]["queue_length"], 12);
         assert_eq!(json["playback"]["track"]["title"], "Test Tone");
         assert_eq!(json["playback"]["track"]["artist"], "Matchbox");
@@ -310,6 +318,8 @@ mod tests {
         let status = StatusResponse::ready("0.1.0", None::<String>).with_playback(PlaybackInfo {
             state: PlaybackState::Stop,
             volume: 40,
+            queue_position: None,
+            queue_id: None,
             queue_length: 0,
             track: None,
         });
@@ -369,6 +379,8 @@ mod tests {
         let status = StatusResponse::ready("0.1.0", None::<String>).with_playback(PlaybackInfo {
             state: PlaybackState::Pause,
             volume: 50,
+            queue_position: Some(1),
+            queue_id: Some(11),
             queue_length: 3,
             track: Some(TrackInfo {
                 uri: "songs/foo.flac".to_string(),

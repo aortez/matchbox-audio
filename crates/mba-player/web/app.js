@@ -216,8 +216,15 @@ function renderQueue() {
   }
 
   for (const item of items) {
-    const row = document.createElement("div");
-    row.className = "list-row";
+    const row = document.createElement("button");
+    row.className = "list-row queue-row";
+    row.type = "button";
+    row.addEventListener("click", () => perform(() => playQueueItem(item)));
+    if (isCurrentQueueItem(item)) {
+      row.classList.add("current");
+      row.setAttribute("aria-current", "true");
+    }
+
     const main = document.createElement("div");
     main.className = "list-row-main";
 
@@ -274,6 +281,16 @@ async function openLibrary(path) {
 async function enqueue(kind, path, label) {
   await postJson(`/api/v1/queue/${kind}`, { path });
   showToast(`Added ${label}`);
+  await Promise.all([refreshStatus(), refreshQueue()]);
+}
+
+async function playQueueItem(item) {
+  const body = { position: item.position };
+  if (item.id !== undefined && item.id !== null) {
+    body.id = item.id;
+  }
+  await postJson("/api/v1/queue/play", body);
+  showToast(`Playing ${item.title || item.name}`);
   await Promise.all([refreshStatus(), refreshQueue()]);
 }
 
@@ -368,6 +385,20 @@ function parentPath(path) {
 function basename(path) {
   const parts = path.split("/").filter(Boolean);
   return parts[parts.length - 1] || path;
+}
+
+function isCurrentQueueItem(item) {
+  const playback = state.status?.playback;
+  if (!playback) {
+    return false;
+  }
+  if (playback.queue_id !== undefined && playback.queue_id !== null && item.id !== undefined && item.id !== null) {
+    return Number(playback.queue_id) === Number(item.id);
+  }
+  if (playback.queue_position !== undefined && playback.queue_position !== null) {
+    return Number(playback.queue_position) === Number(item.position);
+  }
+  return playback.track?.uri === item.uri;
 }
 
 function formatSeconds(value) {
