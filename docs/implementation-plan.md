@@ -211,7 +211,7 @@ landings so each step ends with a deployable, verified image.
 - Landing B — PIM483 audio path: confirm the `hifiberry-dac` overlay is
   active, set ALSA's default to the I2S card, replace MPD's `null` output
   with an ALSA output to the DAC, enable MPD's software mixer, clamp startup
-  volume to `40`, sync a small test track to `/data/music`, verify MPD playback
+  volume to `60`, sync a small test track to `/data/music`, verify MPD playback
   through the PIM483 output, and confirm clean analog line-out by listening.
   MPD 0.23.14 does not provide a supported `mixer_max_volume` setting; the
   device drives a line-out into an external amp, so the previously planned
@@ -249,7 +249,10 @@ were bound to the existing `POST /api/v1/playback/*` endpoints through
 next. The queue backend also exposes `GET`/`DELETE /api/v1/queue`,
 `POST /api/v1/queue/files`, and `POST /api/v1/queue/directories`, with matching
 `mba-cli queue`, `clear`, `enqueue`/`enqueue-file`, and `enqueue-dir` commands.
-The broader web UI polish remains open.
+The first-pass static web app is embedded in `mba-player` with no frontend build
+step: it provides status polling, transport controls, volume, library browsing,
+file/directory enqueue actions, and a queue view. Broader visual polish,
+search, and richer queue editing remain open.
 
 Landing C PIM483 display sketch:
 
@@ -291,7 +294,7 @@ by the existing `hifiberry-dac` overlay and `dtparam=audio=off` boot config.
 MPD now uses an ALSA output named `matchbox-pim483-lineout` with
 `mixer_type "software"` instead of the Landing A `null` output. A hardened
 `mba-mpd-startup-volume.service` runs after `mpd.service` as `mpd:audio` and
-clamps boot volume to `40` when the saved software volume is unset or higher
+clamps boot volume to `60` when the saved software volume is unset or higher
 than that. The image also installs `alsa-utils-aplay`, and the `matchbox` admin
 user is in the `audio` group so SSH diagnostics can inspect ALSA devices without
 restoring broad sudo. The image was A/B deployed to slot `b` on
@@ -301,7 +304,7 @@ checks for the PIM483 ALSA card, MPD output, startup-volume service, and
 `/data/music/_landing-b-test/test-tone.flac`, scanned by MPD, queued, and played
 through MPD with no `mpd.service` journal errors. Physical listening through the
 analog line-out confirmed the test tone was audible; MPD volume was returned to
-`40` afterward.
+`60` afterward.
 
 Phase 3 Landing C status note: on May 9, 2026, `mba-player` gained an MPD
 client built on the `mpd_client` crate. A spawned actor task owns the single
@@ -315,10 +318,11 @@ exponential backoff (500 ms → 10 s) drains pending commands as
 exposes the same verbs (`mba-cli play | pause | toggle | stop | next | prev |
 seek <secs> | volume <0-100>`) and prints the new `playback_*` fields in
 `mba-cli status`. Volume validates `0..=100` only — no software cap, since
-the PIM483 line-out feeds an external amp. The startup volume default was
-bumped from 40 to 80 because that level is comfortable through headphones
-on the line-out. The placeholder web page picked up a denser layout split
-into service, network, and playback rows. The PIM483 panel was rewritten
+the PIM483 line-out feeds an external amp. The startup volume default is `60`,
+which is a better listening baseline than the original conservative `40` while
+still leaving headroom through the external amp. The placeholder web page picked
+up a denser layout split into service, network, and playback rows. The PIM483
+panel was rewritten
 into three horizontal bands: a network band (`MODE · connection` plus
 address, or `MODE · hotspot-ssid` plus `pass <password>` in car mode), a
 now-playing band (state glyph + title, artist/album, elapsed/duration on
@@ -331,7 +335,7 @@ A/B deployed to slot `a` on `matchbox-audio.local`; `npm run smoke` and
 sets MPD volume). End-to-end verification drove an MPD queue with the
 Landing B test tone through `mba-cli play`, `toggle`, `next`, `seek`,
 `volume`, and `stop`; each command was reflected in `mpc status` and
-audible through the headphone line-out, and MPD volume was left at 80.
+audible through the headphone line-out.
 
 Phase 3 Landing D status note: on May 9, 2026, `mba-player` gained library
 endpoints. `POST /api/v1/library/rescan` triggers MPD's `update` and returns
@@ -404,12 +408,12 @@ support is deferred to Phase 4.
 
 ## Phase 6: Minimal Web App on Device
 
-- [ ] Choose web app stack.
-- [ ] Serve static web app from `mba-player`.
-- [ ] Implement playback status and controls.
-- [ ] Implement directory/file browser.
-- [ ] Implement file and directory enqueue actions.
-- [ ] Implement queue view.
+- [x] Choose web app stack.
+- [x] Serve static web app from `mba-player`.
+- [x] Implement playback status and controls.
+- [x] Implement directory/file browser.
+- [x] Implement file and directory enqueue actions.
+- [x] Implement queue view.
 - [ ] Implement path search.
 - [ ] Verify the app works without internet access.
 - [ ] Verify the app over the Pi hotspot.

@@ -5,8 +5,8 @@ use std::{
 
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
-    response::{Html, IntoResponse, Response},
+    http::{header::CONTENT_TYPE, StatusCode},
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -19,6 +19,10 @@ use tracing::warn;
 
 use crate::mpd::{MpdError, MpdHandle};
 
+const INDEX_HTML: &str = include_str!("../web/index.html");
+const APP_CSS: &str = include_str!("../web/app.css");
+const APP_JS: &str = include_str!("../web/app.js");
+
 #[derive(Clone)]
 pub struct AppState {
     pub status: StatusResponse,
@@ -29,6 +33,8 @@ pub struct AppState {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
+        .route("/app.css", get(app_css))
+        .route("/app.js", get(app_js))
         .route("/api/v1/status", get(status))
         .route("/api/v1/playback/play", post(play))
         .route("/api/v1/playback/pause", post(pause))
@@ -46,149 +52,20 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn index(State(state): State<AppState>) -> Html<String> {
-    let network = read_network_status(&state.network_script).await;
-    let playback = state.mpd.snapshot();
-
-    let network_mode = network
-        .as_ref()
-        .map(|network| network.mode.as_str())
-        .unwrap_or("unknown");
-    let network_address = network
-        .as_ref()
-        .map(|network| network.ip4.as_str())
-        .unwrap_or("-");
-    let connection_name = network
-        .as_ref()
-        .map(|network| network.active_connection.as_str())
-        .unwrap_or("-");
-
-    let (playback_state, volume_text, queue_text, track_block) = match playback {
-        Some(info) => {
-            let track_block = info
-                .track
-                .as_ref()
-                .map(|track| {
-                    let title = track.title.as_deref().unwrap_or("(untitled)");
-                    let artist = track.artist.as_deref().unwrap_or("");
-                    let album = track.album.as_deref().unwrap_or("");
-                    let elapsed = track.elapsed_s.unwrap_or(0);
-                    let duration = track.duration_s.unwrap_or(0);
-                    format!(
-                        r#"<p class="track">{title}</p>
-    <p class="meta">{artist}{separator}{album}</p>
-    <p class="time">{elapsed} / {duration}</p>"#,
-                        title = html_escape(title),
-                        artist = html_escape(artist),
-                        separator = if album.is_empty() || artist.is_empty() {
-                            ""
-                        } else {
-                            " — "
-                        },
-                        album = html_escape(album),
-                        elapsed = format_seconds(elapsed),
-                        duration = format_seconds(duration),
-                    )
-                })
-                .unwrap_or_else(|| String::from(r#"<p class="track muted">idle</p>"#));
-            (
-                info.state.to_string(),
-                format!("{}", info.volume),
-                format!("{}", info.queue_length),
-                track_block,
-            )
-        }
-        None => (
-            String::from("unavailable"),
-            String::from("-"),
-            String::from("-"),
-            String::from(r#"<p class="track muted">MPD unavailable</p>"#),
-        ),
-    };
-
-    Html(format!(
-        r#"<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Matchbox Audio</title>
-  <style>
-    body {{ font-family: system-ui, sans-serif; margin: 1.25rem; max-width: 32rem; }}
-    h1 {{ margin: 0 0 0.5rem; }}
-    section {{ border: 1px solid #ddd; border-radius: 0.5rem; padding: 0.75rem 1rem; margin-bottom: 0.75rem; }}
-    .row {{ display: flex; gap: 1.5rem; flex-wrap: wrap; }}
-    .row > div {{ min-width: 8rem; }}
-    .label {{ font-size: 0.75rem; text-transform: uppercase; color: #666; }}
-    .value {{ font-size: 1.05rem; }}
-    .track {{ font-size: 1.1rem; margin: 0.1rem 0; }}
-    .meta {{ color: #444; margin: 0.1rem 0; }}
-    .time {{ color: #444; margin: 0.1rem 0; }}
-    .muted {{ color: #888; font-style: italic; }}
-  </style>
-</head>
-<body>
-  <h1>Matchbox Audio</h1>
-
-  <section>
-    <div class="row">
-      <div><div class="label">service</div><div class="value">{service_state}</div></div>
-      <div><div class="label">version</div><div class="value">{version}</div></div>
-    </div>
-  </section>
-
-  <section>
-    <div class="row">
-      <div><div class="label">network</div><div class="value">{network_mode}</div></div>
-      <div><div class="label">connection</div><div class="value">{connection}</div></div>
-      <div><div class="label">address</div><div class="value">{address}</div></div>
-    </div>
-  </section>
-
-  <section>
-    <div class="row">
-      <div><div class="label">playback</div><div class="value">{playback_state}</div></div>
-      <div><div class="label">volume</div><div class="value">{volume}</div></div>
-      <div><div class="label">queue</div><div class="value">{queue}</div></div>
-    </div>
-    {track_block}
-  </section>
-
-  <p><small>API: <code>/api/v1/status</code></small></p>
-</body>
-</html>
-"#,
-        service_state = html_escape(&state.status.service.state.to_string()),
-        version = html_escape(&state.status.build.version),
-        network_mode = html_escape(network_mode),
-        connection = html_escape(connection_name),
-        address = html_escape(network_address),
-        playback_state = html_escape(&playback_state),
-        volume = html_escape(&volume_text),
-        queue = html_escape(&queue_text),
-        track_block = track_block,
-    ))
+async fn index() -> impl IntoResponse {
+    static_text("text/html; charset=utf-8", INDEX_HTML)
 }
 
-fn format_seconds(seconds: u32) -> String {
-    let minutes = seconds / 60;
-    let remainder = seconds % 60;
-    format!("{minutes}:{remainder:02}")
+async fn app_css() -> impl IntoResponse {
+    static_text("text/css; charset=utf-8", APP_CSS)
 }
 
-fn html_escape(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for ch in value.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#x27;"),
-            other => out.push(other),
-        }
-    }
-    out
+async fn app_js() -> impl IntoResponse {
+    static_text("text/javascript; charset=utf-8", APP_JS)
+}
+
+fn static_text(content_type: &'static str, body: &'static str) -> impl IntoResponse {
+    ([(CONTENT_TYPE, content_type)], body)
 }
 
 async fn status(State(state): State<AppState>) -> Json<StatusResponse> {

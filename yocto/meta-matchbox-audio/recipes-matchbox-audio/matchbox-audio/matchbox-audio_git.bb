@@ -37,6 +37,12 @@ python () {
                     for name in sorted(files):
                         if name.endswith(".rs"):
                             compile_checksums.append(f"{os.path.join(root, name)}:True")
+            crate_web = os.path.join(crates_dir, crate, "web")
+            if os.path.isdir(crate_web):
+                for root, _, files in os.walk(crate_web):
+                    for name in sorted(files):
+                        if name.endswith((".html", ".css", ".js")):
+                            compile_checksums.append(f"{os.path.join(root, name)}:True")
     d.appendVarFlag("do_compile", "file-checksums", " " + " ".join(compile_checksums))
     d.appendVarFlag(
         "do_install",
