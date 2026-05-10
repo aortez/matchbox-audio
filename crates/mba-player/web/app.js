@@ -244,18 +244,29 @@ function renderQueue() {
 
 function libraryRow({ title, meta, open, add }) {
   const row = document.createElement("div");
-  row.className = "list-row";
+  row.className = open ? "list-row library-row openable" : "list-row library-row";
+  if (open) {
+    row.tabIndex = 0;
+    row.setAttribute("role", "button");
+    row.setAttribute("aria-label", `Open ${title}`);
+    row.addEventListener("click", open);
+    row.addEventListener("keydown", (event) => {
+      if (event.target !== row) {
+        return;
+      }
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        open();
+      }
+    });
+  }
 
   const main = document.createElement("div");
   main.className = "list-row-main";
 
-  const titleEl = document.createElement(open ? "button" : "span");
-  titleEl.className = open ? "open-button row-title" : "row-title";
+  const titleEl = document.createElement("span");
+  titleEl.className = "row-title";
   titleEl.textContent = title;
-  if (open) {
-    titleEl.type = "button";
-    titleEl.addEventListener("click", open);
-  }
 
   const metaEl = document.createElement("span");
   metaEl.className = "row-meta";
@@ -267,7 +278,10 @@ function libraryRow({ title, meta, open, add }) {
   addButton.className = "add-button";
   addButton.type = "button";
   addButton.textContent = "Add";
-  addButton.addEventListener("click", add);
+  addButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    add();
+  });
 
   row.append(main, addButton);
   return row;

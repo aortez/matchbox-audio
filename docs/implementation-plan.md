@@ -254,8 +254,14 @@ The first-pass static web app is embedded in `mba-player` with no frontend build
 step: it provides status polling, transport controls, volume, library browsing,
 file/directory enqueue actions, and a queue view. Queue rows can now jump
 directly to that queued item through `POST /api/v1/queue/play`, preferring
-MPD's stable queue id and falling back to position. Broader visual polish,
-search, and richer queue editing remain open.
+MPD's stable queue id and falling back to position. Broader visual polish and
+richer queue editing remain open. Search is deferred.
+
+Car-mode phone verification confirmed the web controller works from the
+`matchbox-audio` hotspot at `http://10.42.0.1:8090/` with cellular data
+disabled: transport controls responded and audio playback continued through the
+PIM483 line-out. The `.local` hostname remains convenience-only; the fixed
+hotspot IP is the supported deterministic URL.
 
 Landing C PIM483 display sketch:
 
@@ -373,7 +379,6 @@ support is deferred to Phase 4.
 - [ ] Ignore hidden files and directories by default.
 - [ ] Use case-insensitive audio extension filtering.
 - [ ] Implement `GET /api/v1/library/list?path=...`.
-- [ ] Implement path search.
 - [x] Implement queue by file.
 - [x] Implement queue by directory.
 - [ ] Define stable recursive directory ordering:
@@ -388,7 +393,6 @@ support is deferred to Phase 4.
 - [ ] Keep Phase 4 browsing and queueing filesystem/path-only.
 - [ ] Add CLI commands:
   - [ ] `mba-cli list`
-  - [ ] `mba-cli search`
   - [x] `mba-cli queue`
   - [x] `mba-cli clear`
   - [x] `mba-cli enqueue-file`
@@ -418,9 +422,8 @@ support is deferred to Phase 4.
 - [x] Implement file and directory enqueue actions.
 - [x] Implement queue view.
 - [x] Implement queue item selection/playback.
-- [ ] Implement path search.
-- [ ] Verify the app works without internet access.
-- [ ] Verify the app over the Pi hotspot.
+- [x] Verify the app works without internet access.
+- [x] Verify the app over the Pi hotspot.
 
 ## Phase 7: Pirate Audio Display and Button Bring-Up
 
@@ -493,3 +496,4 @@ play/pause, B skips to previous, and X skips to next for the current MPD queue.
 - [ ] BLE control or provisioning.
 - [ ] Bluetooth audio sink mode.
 - [ ] USB mass-storage maintenance mode.
+- [ ] Library/path search across web, API, and CLI.

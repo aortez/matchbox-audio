@@ -48,7 +48,8 @@ button:disabled {
 }
 
 button:focus-visible,
-input:focus-visible {
+input:focus-visible,
+.list-row:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -237,6 +238,17 @@ button.list-row {
 
 .queue-row.current .row-title {
   color: var(--accent-strong);
+}
+
+.library-row.openable {
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+
+.library-row.openable:hover,
+.library-row.openable:focus-visible {
+  border-color: #55705f;
+  background: #1b211b;
 }
 
 .list-row-main {
