@@ -256,8 +256,10 @@ The first-pass static web app is embedded in `mba-player` with no frontend build
 step: it provides status polling, transport controls, volume, library browsing,
 file/directory enqueue actions, and a queue view. Queue rows can now jump
 directly to that queued item through `POST /api/v1/queue/play`, preferring
-MPD's stable queue id and falling back to position. Broader visual polish and
-richer queue editing remain open. Search is deferred.
+MPD's stable queue id and falling back to position, with an optimistic highlight
+while backend playback status catches up. Directory rows open from the full row
+except for the `Add` button. Broader visual polish and richer queue editing
+remain open. Search is deferred.
 
 Car-mode phone verification confirmed the web controller works from the
 `matchbox-audio` hotspot at `http://10.42.0.1:8090/` with cellular data
@@ -356,11 +358,11 @@ single-level folders + tracks (`{path, directories: [{name, path}], tracks:
 [{uri, name, title?, artist?, album?, duration_s?}]}`) — recursive walks are
 deferred to the Phase 4 browse work. `mba-cli` exposes `rescan` and
 `library [path]`. Host-side ingestion is `npm run music-sync`, a Node script
-that reads `~/.config/matchbox-audio/sync.json` (with `--source/--host/--user/
+that reads repo-local `config/sync.local.json` (with `--source/--host/--user/
 --port/--dry-run/--no-delete` overrides), runs
 `rsync -av --delete --exclude=.DS_Store ...` to `matchbox@<host>:/data/music/`,
 then POSTs to `/api/v1/library/rescan`. An example config lives at
-`yocto/scripts/sync.config.example.json`. The matchbox-audio recipe was
+`config/sync.local.example.json`. The matchbox-audio recipe was
 updated so `do_compile[file-checksums]` covers every per-crate `Cargo.toml`
 plus all `crates/*/src/**.rs` — without that, source-only edits don't
 invalidate the cache and the image keeps shipping the old binary. The
