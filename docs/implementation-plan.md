@@ -250,6 +250,8 @@ were bound to the existing `POST /api/v1/playback/*` endpoints through
 next. The queue backend also exposes `GET`/`DELETE /api/v1/queue`,
 `POST /api/v1/queue/files`, and `POST /api/v1/queue/directories`, with matching
 `mba-cli queue`, `clear`, `enqueue`/`enqueue-file`, and `enqueue-dir` commands.
+Enqueue now starts playback automatically when the queue was empty and the add
+leaves MPD with at least one queued item.
 The first-pass static web app is embedded in `mba-player` with no frontend build
 step: it provides status polling, transport controls, volume, library browsing,
 file/directory enqueue actions, and a queue view. Queue rows can now jump

@@ -471,7 +471,15 @@ async fn handle_enqueue(
     reply: oneshot::Sender<Result<(), MpdError>>,
 ) -> bool {
     match command_with_optional_arg("add", &path) {
-        Ok(command) => send_raw_unit_command(client, command, reply, "MPD add failed").await,
+        Ok(command) => match enqueue_and_autoplay_if_empty(client, command).await {
+            Ok(()) => {
+                let _ = reply.send(Ok(()));
+            }
+            Err(message) => {
+                warn!(%message, "MPD add failed");
+                let _ = reply.send(Err(MpdError::Command(message)));
+            }
+        },
         Err(error) => {
             let message = error.to_string();
             warn!(%message, "add argument rejected");
@@ -479,6 +487,50 @@ async fn handle_enqueue(
         }
     }
     true
+}
+
+async fn enqueue_and_autoplay_if_empty(client: &Client, command: RawCommand) -> Result<(), String> {
+    let before = client
+        .command(commands::Status)
+        .await
+        .map_err(|e| e.to_string())?;
+    client
+        .raw_command(command)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if should_autoplay_after_enqueue(before.playlist_length, client).await? {
+        client
+            .command(commands::Play::current())
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+async fn should_autoplay_after_enqueue(
+    previous_queue_length: usize,
+    client: &Client,
+) -> Result<bool, String> {
+    if previous_queue_length != 0 {
+        return Ok(false);
+    }
+    let after = client
+        .command(commands::Status)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(queue_transition_should_autoplay(
+        previous_queue_length,
+        after.playlist_length,
+    ))
+}
+
+fn queue_transition_should_autoplay(
+    previous_queue_length: usize,
+    current_queue_length: usize,
+) -> bool {
+    previous_queue_length == 0 && current_queue_length > 0
 }
 
 async fn handle_clear_queue(client: &Client, reply: oneshot::Sender<Result<(), MpdError>>) -> bool {
@@ -891,5 +943,14 @@ mod tests {
 
         assert_eq!(queue.items[0].position, 0);
         assert_eq!(queue.items[1].position, 1);
+    }
+
+    #[test]
+    fn autoplay_after_enqueue_only_when_queue_was_empty_and_gained_items() {
+        assert!(queue_transition_should_autoplay(0, 1));
+        assert!(queue_transition_should_autoplay(0, 12));
+        assert!(!queue_transition_should_autoplay(0, 0));
+        assert!(!queue_transition_should_autoplay(1, 2));
+        assert!(!queue_transition_should_autoplay(3, 3));
     }
 }
