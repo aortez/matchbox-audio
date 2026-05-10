@@ -2,8 +2,8 @@
 
 import { spawnSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
-import { homedir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 
 import {
   colors,
@@ -14,11 +14,15 @@ import {
   warn,
 } from '../pi-base/scripts/lib/index.mjs';
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const YOCTO_DIR = dirname(__dirname);
+const REPO_ROOT = dirname(YOCTO_DIR);
+
 const DEFAULT_HOST = 'matchbox-audio.local';
 const DEFAULT_USER = 'matchbox';
 const DEFAULT_PORT = 8090;
 const REMOTE_MUSIC_DIR = '/data/music/';
-const CONFIG_PATH = join(homedir(), '.config', 'matchbox-audio', 'sync.json');
+const CONFIG_PATH = join(REPO_ROOT, 'config', 'sync.local.json');
 const RSYNC_EXCLUDES = [
   '.DS_Store',
   '._*',
