@@ -2,7 +2,7 @@ use std::{net::SocketAddr, time::Duration};
 
 use mba_protocol::{
     basename, LibraryDirectory, LibraryListing, LibraryTrack, PlaybackInfo, PlaybackState,
-    TrackInfo,
+    QueueItem, QueueListing, TrackInfo,
 };
 use mpd_client::{
     client::{ConnectionEvent, ConnectionEvents, Subsystem},
@@ -68,6 +68,16 @@ enum Request {
         path: String,
         reply: oneshot::Sender<Result<LibraryListing, MpdError>>,
     },
+    Enqueue {
+        path: String,
+        reply: oneshot::Sender<Result<(), MpdError>>,
+    },
+    ClearQueue {
+        reply: oneshot::Sender<Result<(), MpdError>>,
+    },
+    ListQueue {
+        reply: oneshot::Sender<Result<QueueListing, MpdError>>,
+    },
 }
 
 impl Request {
@@ -80,6 +90,12 @@ impl Request {
                 let _ = reply.send(Err(error));
             }
             Request::ListLibrary { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Request::Enqueue { reply, .. } | Request::ClearQueue { reply } => {
+                let _ = reply.send(Err(error));
+            }
+            Request::ListQueue { reply } => {
                 let _ = reply.send(Err(error));
             }
         }
@@ -142,6 +158,37 @@ impl MpdHandle {
         let (tx, rx) = oneshot::channel();
         self.commands
             .send(Request::ListLibrary { path, reply: tx })
+            .await
+            .map_err(|_| MpdError::ChannelClosed)?;
+        rx.await.map_err(|_| MpdError::ChannelClosed)?
+    }
+
+    pub async fn enqueue(&self, path: String) -> Result<(), MpdError> {
+        let (tx, rx) = oneshot::channel();
+        self.commands
+            .send(Request::Enqueue { path, reply: tx })
+            .await
+            .map_err(|_| MpdError::ChannelClosed)?;
+        rx.await.map_err(|_| MpdError::ChannelClosed)?
+    }
+
+    pub async fn enqueue_directory(&self, path: String) -> Result<(), MpdError> {
+        self.enqueue(path).await
+    }
+
+    pub async fn clear_queue(&self) -> Result<(), MpdError> {
+        let (tx, rx) = oneshot::channel();
+        self.commands
+            .send(Request::ClearQueue { reply: tx })
+            .await
+            .map_err(|_| MpdError::ChannelClosed)?;
+        rx.await.map_err(|_| MpdError::ChannelClosed)?
+    }
+
+    pub async fn list_queue(&self) -> Result<QueueListing, MpdError> {
+        let (tx, rx) = oneshot::channel();
+        self.commands
+            .send(Request::ListQueue { reply: tx })
             .await
             .map_err(|_| MpdError::ChannelClosed)?;
         rx.await.map_err(|_| MpdError::ChannelClosed)?
@@ -283,6 +330,9 @@ async fn handle_request(client: &Client, request: Request) -> bool {
         Request::Action { action, reply } => handle_action(client, action, reply).await,
         Request::Rescan { reply } => handle_rescan(client, reply).await,
         Request::ListLibrary { path, reply } => handle_list_library(client, path, reply).await,
+        Request::Enqueue { path, reply } => handle_enqueue(client, path, reply).await,
+        Request::ClearQueue { reply } => handle_clear_queue(client, reply).await,
+        Request::ListQueue { reply } => handle_list_queue(client, reply).await,
     }
 }
 
@@ -392,6 +442,73 @@ async fn handle_list_library(
     true
 }
 
+async fn handle_enqueue(
+    client: &Client,
+    path: String,
+    reply: oneshot::Sender<Result<(), MpdError>>,
+) -> bool {
+    match command_with_optional_arg("add", &path) {
+        Ok(command) => send_raw_unit_command(client, command, reply, "MPD add failed").await,
+        Err(error) => {
+            let message = error.to_string();
+            warn!(%message, "add argument rejected");
+            let _ = reply.send(Err(MpdError::Command(message)));
+        }
+    }
+    true
+}
+
+async fn handle_clear_queue(client: &Client, reply: oneshot::Sender<Result<(), MpdError>>) -> bool {
+    send_raw_unit_command(client, RawCommand::new("clear"), reply, "MPD clear failed").await;
+    true
+}
+
+async fn handle_list_queue(
+    client: &Client,
+    reply: oneshot::Sender<Result<QueueListing, MpdError>>,
+) -> bool {
+    match client.raw_command(RawCommand::new("playlistinfo")).await {
+        Ok(frame) => {
+            let queue = parse_queue(frame.fields());
+            let _ = reply.send(Ok(queue));
+        }
+        Err(error) => {
+            let message = error.to_string();
+            warn!(%message, "MPD playlistinfo failed");
+            let _ = reply.send(Err(MpdError::Command(message)));
+        }
+    }
+    true
+}
+
+async fn send_raw_unit_command(
+    client: &Client,
+    command: RawCommand,
+    reply: oneshot::Sender<Result<(), MpdError>>,
+    log_message: &str,
+) {
+    match client.raw_command(command).await {
+        Ok(_) => {
+            let _ = reply.send(Ok(()));
+        }
+        Err(error) => {
+            let message = error.to_string();
+            warn!(%message, "{log_message}");
+            let _ = reply.send(Err(MpdError::Command(message)));
+        }
+    }
+}
+
+fn command_with_optional_arg(command_name: &'static str, arg: &str) -> Result<RawCommand, String> {
+    let mut command = RawCommand::new(command_name);
+    if !arg.is_empty() {
+        command
+            .add_argument::<&str>(arg)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(command)
+}
+
 fn subsystem_affects_playback(subsystem: &Subsystem) -> bool {
     matches!(
         subsystem,
@@ -445,6 +562,101 @@ fn playback_from(status: Status, current: Option<SongInQueue>) -> PlaybackInfo {
         queue_length: status.playlist_length as u32,
         track,
     }
+}
+
+struct PendingQueueItem {
+    uri: String,
+    position: Option<u32>,
+    id: Option<u64>,
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    duration_s: Option<u32>,
+}
+
+impl PendingQueueItem {
+    fn new(uri: String) -> Self {
+        Self {
+            uri,
+            position: None,
+            id: None,
+            title: None,
+            artist: None,
+            album: None,
+            duration_s: None,
+        }
+    }
+
+    fn into_item(self, fallback_position: u32) -> QueueItem {
+        QueueItem {
+            position: self.position.unwrap_or(fallback_position),
+            id: self.id,
+            name: basename(&self.uri).to_string(),
+            uri: self.uri,
+            title: self.title,
+            artist: self.artist,
+            album: self.album,
+            duration_s: self.duration_s,
+        }
+    }
+}
+
+fn parse_queue<'a, I>(fields: I) -> QueueListing
+where
+    I: IntoIterator<Item = (&'a str, &'a str)>,
+{
+    let mut items = Vec::new();
+    let mut pending: Option<PendingQueueItem> = None;
+
+    for (key, value) in fields {
+        match key {
+            "file" => {
+                if let Some(item) = pending.take() {
+                    items.push(item.into_item(items.len() as u32));
+                }
+                pending = Some(PendingQueueItem::new(value.to_string()));
+            }
+            "Pos" => {
+                if let Some(item) = pending.as_mut() {
+                    item.position = value.parse::<u32>().ok();
+                }
+            }
+            "Id" => {
+                if let Some(item) = pending.as_mut() {
+                    item.id = value.parse::<u64>().ok();
+                }
+            }
+            "Title" => {
+                if let Some(item) = pending.as_mut() {
+                    item.title = Some(value.to_string());
+                }
+            }
+            "Artist" => {
+                if let Some(item) = pending.as_mut() {
+                    item.artist = Some(value.to_string());
+                }
+            }
+            "Album" => {
+                if let Some(item) = pending.as_mut() {
+                    item.album = Some(value.to_string());
+                }
+            }
+            "Time" | "duration" => {
+                if let Some(item) = pending.as_mut() {
+                    if let Ok(secs) = value.parse::<f64>() {
+                        item.duration_s = Some(secs.round().max(0.0) as u32);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(item) = pending.take() {
+        items.push(item.into_item(items.len() as u32));
+    }
+
+    QueueListing { items }
 }
 
 struct PendingTrack {
@@ -605,5 +817,48 @@ mod tests {
         let track = &listing.tracks[0];
         assert_eq!(track.uri, "Pink Floyd/Dark Side/01 Speak to Me.flac");
         assert_eq!(track.name, "01 Speak to Me.flac");
+    }
+
+    #[test]
+    fn parse_queue_groups_playlistinfo_items() {
+        let fields: &[(&str, &str)] = &[
+            ("file", "Pink Floyd/Dark Side/01 Speak to Me.flac"),
+            ("Title", "Speak to Me"),
+            ("Artist", "Pink Floyd"),
+            ("Album", "Dark Side"),
+            ("Time", "91"),
+            ("duration", "90.622"),
+            ("Pos", "0"),
+            ("Id", "10"),
+            ("file", "single.flac"),
+            ("Time", "214"),
+            ("Pos", "1"),
+            ("Id", "11"),
+        ];
+        let queue = parse_queue(fields.iter().copied());
+
+        assert_eq!(queue.items.len(), 2);
+        assert_eq!(queue.items[0].position, 0);
+        assert_eq!(queue.items[0].id, Some(10));
+        assert_eq!(
+            queue.items[0].uri,
+            "Pink Floyd/Dark Side/01 Speak to Me.flac"
+        );
+        assert_eq!(queue.items[0].name, "01 Speak to Me.flac");
+        assert_eq!(queue.items[0].title.as_deref(), Some("Speak to Me"));
+        assert_eq!(queue.items[0].artist.as_deref(), Some("Pink Floyd"));
+        assert_eq!(queue.items[0].album.as_deref(), Some("Dark Side"));
+        assert_eq!(queue.items[0].duration_s, Some(91));
+        assert_eq!(queue.items[1].position, 1);
+        assert_eq!(queue.items[1].name, "single.flac");
+    }
+
+    #[test]
+    fn parse_queue_uses_fallback_position_when_missing() {
+        let fields: &[(&str, &str)] = &[("file", "one.flac"), ("file", "two.flac")];
+        let queue = parse_queue(fields.iter().copied());
+
+        assert_eq!(queue.items[0].position, 0);
+        assert_eq!(queue.items[1].position, 1);
     }
 }

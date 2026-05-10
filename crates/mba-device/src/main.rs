@@ -1,11 +1,18 @@
 use std::{
     convert::Infallible,
+    io::Write as _,
+    os::unix::{
+        fs::PermissionsExt,
+        net::{UnixListener, UnixStream},
+    },
+    path::{Path, PathBuf},
     process::Command,
+    sync::mpsc::{self, SyncSender},
     thread,
     time::{Duration, Instant},
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use embedded_graphics::{
     draw_target::DrawTarget,
@@ -45,6 +52,11 @@ const DISPLAY_DC_PIN: u8 = 9;
 const DISPLAY_BACKLIGHT_PIN: u8 = 13;
 const DISPLAY_SPI_CLOCK_HZ: u32 = 62_500_000;
 
+const DEFAULT_SNAPSHOT_SOCKET: &str = "/run/mba-device/snapshot.sock";
+const SNAPSHOT_REPLY_TIMEOUT: Duration = Duration::from_secs(5);
+
+type SnapshotReply = SyncSender<Vec<u8>>;
+
 // ST7789 controller commands used by the Pirate Audio display.
 const ST7789_SWRESET: u8 = 0x01;
 const ST7789_SLPOUT: u8 = 0x11;
@@ -80,6 +92,14 @@ struct Args {
     /// Disable display initialization and only monitor buttons.
     #[arg(long)]
     no_display: bool,
+
+    /// Unix socket path served for on-demand framebuffer snapshots.
+    #[arg(long, default_value = DEFAULT_SNAPSHOT_SOCKET)]
+    snapshot_socket: PathBuf,
+
+    /// Disable the framebuffer snapshot socket.
+    #[arg(long)]
+    no_snapshot_socket: bool,
 }
 
 fn main() -> Result<()> {
@@ -116,6 +136,21 @@ fn main() -> Result<()> {
         Err(error) => {
             warn!(%error, "button initialization failed; display will still run");
             None
+        }
+    };
+
+    let snapshot_rx = if args.no_snapshot_socket {
+        None
+    } else {
+        match start_snapshot_server(&args.snapshot_socket) {
+            Ok(rx) => {
+                info!(socket = %args.snapshot_socket.display(), "snapshot socket listening");
+                Some(rx)
+            }
+            Err(error) => {
+                warn!(%error, "snapshot socket failed to start; screenshots disabled");
+                None
+            }
         }
     };
 
@@ -217,7 +252,25 @@ fn main() -> Result<()> {
             last_display = Instant::now();
         }
 
+        if let Some(rx) = snapshot_rx.as_ref() {
+            drain_snapshot_requests(rx, &frame);
+        }
+
         thread::sleep(POLL_INTERVAL);
+    }
+}
+
+fn drain_snapshot_requests(rx: &mpsc::Receiver<SnapshotReply>, frame: &Framebuffer) {
+    while let Ok(reply) = rx.try_recv() {
+        match encode_framebuffer_png(frame) {
+            Ok(bytes) => {
+                // try_send fails if the requester gave up waiting; that's fine.
+                let _ = reply.try_send(bytes);
+            }
+            Err(error) => {
+                warn!(%error, "failed to encode snapshot");
+            }
+        }
     }
 }
 
@@ -920,6 +973,91 @@ impl DrawTarget for Framebuffer {
     }
 }
 
+fn start_snapshot_server(socket_path: &Path) -> Result<mpsc::Receiver<SnapshotReply>> {
+    if let Some(parent) = socket_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create snapshot socket dir {}", parent.display())
+            })?;
+        }
+    }
+    if socket_path.exists() {
+        std::fs::remove_file(socket_path).ok();
+    }
+
+    let listener = UnixListener::bind(socket_path)
+        .with_context(|| format!("failed to bind snapshot socket {}", socket_path.display()))?;
+    // Allow non-root users (CLI over ssh as the matchbox user) to connect.
+    std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o666))
+        .with_context(|| format!("failed to chmod snapshot socket {}", socket_path.display()))?;
+
+    let (tx, rx) = mpsc::channel::<SnapshotReply>();
+    let socket_label = socket_path.to_path_buf();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            match stream {
+                Ok(stream) => {
+                    let tx = tx.clone();
+                    thread::spawn(move || {
+                        if let Err(error) = handle_snapshot_request(stream, tx) {
+                            warn!(%error, "snapshot request handler failed");
+                        }
+                    });
+                }
+                Err(error) => {
+                    warn!(%error, "snapshot socket accept failed");
+                }
+            }
+        }
+        info!(socket = %socket_label.display(), "snapshot accept loop exited");
+    });
+    Ok(rx)
+}
+
+fn handle_snapshot_request(
+    mut stream: UnixStream,
+    snapshot_tx: mpsc::Sender<SnapshotReply>,
+) -> Result<()> {
+    let (reply_tx, reply_rx) = mpsc::sync_channel::<Vec<u8>>(1);
+    snapshot_tx
+        .send(reply_tx)
+        .map_err(|_| anyhow!("snapshot request channel closed"))?;
+    let bytes = reply_rx
+        .recv_timeout(SNAPSHOT_REPLY_TIMEOUT)
+        .context("snapshot request timed out")?;
+    stream
+        .write_all(&bytes)
+        .context("failed to write snapshot to client")?;
+    Ok(())
+}
+
+fn encode_framebuffer_png(frame: &Framebuffer) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut buf, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder
+            .write_header()
+            .context("failed to write PNG header")?;
+        let mut rgb = Vec::with_capacity((DISPLAY_WIDTH * DISPLAY_HEIGHT * 3) as usize);
+        for pixel in &frame.pixels {
+            let raw = RawU16::from(*pixel).into_inner();
+            let r5 = ((raw >> 11) & 0x1F) as u8;
+            let g6 = ((raw >> 5) & 0x3F) as u8;
+            let b5 = (raw & 0x1F) as u8;
+            // Replicate the high bits so 5/6-bit channels span the full 8-bit range.
+            rgb.push((r5 << 3) | (r5 >> 2));
+            rgb.push((g6 << 2) | (g6 >> 4));
+            rgb.push((b5 << 3) | (b5 >> 2));
+        }
+        writer
+            .write_image_data(&rgb)
+            .context("failed to write PNG pixels")?;
+    }
+    Ok(buf)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -964,5 +1102,17 @@ mod tests {
             playback_command_url("http://127.0.0.1:8090/", PlaybackCommand::Next),
             "http://127.0.0.1:8090/api/v1/playback/next"
         );
+    }
+
+    #[test]
+    fn encode_framebuffer_png_emits_valid_png() {
+        let frame = Framebuffer::new(Rgb565::new(31, 0, 0));
+        let bytes = encode_framebuffer_png(&frame).expect("encode succeeds");
+        assert!(
+            bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]),
+            "expected PNG signature, got {:02x?}",
+            &bytes[..bytes.len().min(8)]
+        );
+        assert!(bytes.len() > 50, "PNG payload looked too small");
     }
 }

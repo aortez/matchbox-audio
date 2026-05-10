@@ -246,7 +246,10 @@ landings so each step ends with a deployable, verified image.
 Landing E partial status: on May 9, 2026, the PIM483 A/B/X transport buttons
 were bound to the existing `POST /api/v1/playback/*` endpoints through
 `mba-player` and MPD: A toggles play/pause, B skips to previous, and X skips to
-next. The broader web UI polish remains open.
+next. The queue backend also exposes `GET`/`DELETE /api/v1/queue`,
+`POST /api/v1/queue/files`, and `POST /api/v1/queue/directories`, with matching
+`mba-cli queue`, `clear`, `enqueue`/`enqueue-file`, and `enqueue-dir` commands.
+The broader web UI polish remains open.
 
 Landing C PIM483 display sketch:
 
@@ -364,8 +367,8 @@ support is deferred to Phase 4.
 - [ ] Use case-insensitive audio extension filtering.
 - [ ] Implement `GET /api/v1/library/list?path=...`.
 - [ ] Implement path search.
-- [ ] Implement queue by file.
-- [ ] Implement queue by directory.
+- [x] Implement queue by file.
+- [x] Implement queue by directory.
 - [ ] Define stable recursive directory ordering:
   - [ ] depth-first traversal
   - [ ] directories before files
@@ -379,8 +382,10 @@ support is deferred to Phase 4.
 - [ ] Add CLI commands:
   - [ ] `mba-cli list`
   - [ ] `mba-cli search`
-  - [ ] `mba-cli enqueue-file`
-  - [ ] `mba-cli enqueue-dir`
+  - [x] `mba-cli queue`
+  - [x] `mba-cli clear`
+  - [x] `mba-cli enqueue-file`
+  - [x] `mba-cli enqueue-dir`
 - [ ] Test with files synced by SSH/`rsync` to `/data/music`.
 - [ ] Add filesystem traversal tests.
 

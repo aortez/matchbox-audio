@@ -90,6 +90,7 @@ function main() {
   check('mba-cli volume sets MPD volume', () => ssh(remoteTarget, "mba-cli volume 80 && mpc status | grep -q 'volume:.*80%'"));
   check('mba-cli rescan triggers MPD update', () => ssh(remoteTarget, "mba-cli rescan | grep -q '^scan started:'"));
   check('mba-cli library lists root', () => ssh(remoteTarget, "mba-cli library | grep -E '^path:'"));
+  check('mba-cli screenshot writes a PNG', () => ssh(remoteTarget, "rm -f /tmp/mba-shot.png && mba-cli screenshot --output /tmp/mba-shot.png && find /tmp/mba-shot.png -size +100c | grep -q . && file /tmp/mba-shot.png | grep -q 'PNG image'"));
   check('PIM483 ALSA card', () => ssh(remoteTarget, "aplay -l && grep -qi hifiberry /proc/asound/cards && echo hifiberry-dac"));
   check('MPD ALSA output', () => ssh(remoteTarget, "mpc outputs | grep 'matchbox-pim483-lineout'"));
   check('/data mount', () => ssh(remoteTarget, "grep ' /data ' /proc/mounts"));

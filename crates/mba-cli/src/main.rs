@@ -1,7 +1,12 @@
+use std::{io::Write as _, path::PathBuf};
+
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
-use mba_protocol::{LibraryListing, RescanResponse, StatusResponse};
+use mba_protocol::{LibraryListing, QueueListing, RescanResponse, StatusResponse};
 use reqwest::{Client, Method, Url};
+use tokio::{io::AsyncReadExt, net::UnixStream};
+
+const DEFAULT_SNAPSHOT_SOCKET: &str = "/run/mba-device/snapshot.sock";
 
 #[derive(Debug, Parser)]
 #[command(author, version, about = "Matchbox Audio command-line client")]
@@ -49,6 +54,30 @@ enum Command {
     },
     /// Trigger an MPD library rescan.
     Rescan,
+    /// Enqueue a track by library path.
+    #[command(alias = "enqueue-file")]
+    Enqueue {
+        /// Track path relative to the music root.
+        path: String,
+    },
+    /// Enqueue a directory by library path.
+    EnqueueDir {
+        /// Directory path relative to the music root.
+        path: String,
+    },
+    /// Show the current playback queue.
+    Queue,
+    /// Clear the current playback queue.
+    Clear,
+    /// Capture the current LCD framebuffer as a PNG.
+    Screenshot {
+        /// Output file path. Use `-` for stdout.
+        #[arg(short, long, default_value = "-")]
+        output: String,
+        /// Path to the mba-device snapshot socket.
+        #[arg(long, default_value = DEFAULT_SNAPSHOT_SOCKET)]
+        socket: PathBuf,
+    },
 }
 
 #[tokio::main]
@@ -90,7 +119,40 @@ async fn main() -> Result<()> {
         }
         Command::Library { path } => list_library(&client, cli.server, path).await,
         Command::Rescan => trigger_rescan(&client, cli.server).await,
+        Command::Enqueue { path } => enqueue_path(&client, cli.server, "files", path).await,
+        Command::EnqueueDir { path } => {
+            enqueue_path(&client, cli.server, "directories", path).await
+        }
+        Command::Queue => show_queue(&client, cli.server).await,
+        Command::Clear => clear_queue(&client, cli.server).await,
+        Command::Screenshot { output, socket } => capture_screenshot(socket, output).await,
     }
+}
+
+async fn capture_screenshot(socket: PathBuf, output: String) -> Result<()> {
+    let mut stream = UnixStream::connect(&socket)
+        .await
+        .with_context(|| format!("failed to connect to snapshot socket {}", socket.display()))?;
+    let mut bytes = Vec::new();
+    stream
+        .read_to_end(&mut bytes)
+        .await
+        .with_context(|| format!("failed to read snapshot from {}", socket.display()))?;
+    if bytes.is_empty() {
+        return Err(anyhow!("device returned an empty snapshot"));
+    }
+    if output == "-" {
+        let mut stdout = std::io::stdout().lock();
+        stdout
+            .write_all(&bytes)
+            .context("failed to write snapshot to stdout")?;
+        stdout.flush().context("failed to flush stdout")?;
+    } else {
+        std::fs::write(&output, &bytes)
+            .with_context(|| format!("failed to write snapshot to {output}"))?;
+        eprintln!("wrote {} bytes to {output}", bytes.len());
+    }
+    Ok(())
 }
 
 async fn show_status(client: &Client, server: Url) -> Result<()> {
@@ -237,6 +299,86 @@ async fn trigger_rescan(client: &Client, server: Url) -> Result<()> {
         .with_context(|| format!("failed to decode rescan response from {url}"))?;
     println!("scan started: job {}", payload.job_id);
     Ok(())
+}
+
+async fn enqueue_path(client: &Client, server: Url, kind: &str, path: String) -> Result<()> {
+    if path.trim().is_empty() {
+        return Err(anyhow!("path must not be empty"));
+    }
+    let url = api_url(server, &format!("/api/v1/queue/{kind}"));
+    let response = client
+        .post(url.clone())
+        .json(&serde_json::json!({ "path": path }))
+        .send()
+        .await
+        .with_context(|| format!("failed to connect to {url}"))?;
+
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
+    }
+
+    let body_text = response.text().await.unwrap_or_default();
+    Err(anyhow!(
+        "enqueue {kind} failed ({status}): {body}",
+        body = body_text.trim()
+    ))
+}
+
+async fn show_queue(client: &Client, server: Url) -> Result<()> {
+    let url = api_url(server, "/api/v1/queue");
+    let queue = client
+        .get(url.clone())
+        .send()
+        .await
+        .with_context(|| format!("failed to connect to {url}"))?
+        .error_for_status()
+        .with_context(|| format!("queue request failed for {url}"))?
+        .json::<QueueListing>()
+        .await
+        .with_context(|| format!("failed to decode queue response from {url}"))?;
+
+    println!("items: {}", queue.items.len());
+    if queue.items.is_empty() {
+        println!("(empty)");
+        return Ok(());
+    }
+    for item in &queue.items {
+        let title = item.title.as_deref().unwrap_or(&item.name);
+        let label = match (item.artist.as_deref(), item.duration_s) {
+            (Some(artist), Some(seconds)) => {
+                format!("{title} — {artist} [{}]", format_seconds(seconds))
+            }
+            (Some(artist), None) => format!("{title} — {artist}"),
+            (None, Some(seconds)) => format!("{title} [{}]", format_seconds(seconds)),
+            (None, None) => title.to_string(),
+        };
+        match item.id {
+            Some(id) => println!("{}: {label} ({}) [id:{id}]", item.position, item.uri),
+            None => println!("{}: {label} ({})", item.position, item.uri),
+        }
+    }
+    Ok(())
+}
+
+async fn clear_queue(client: &Client, server: Url) -> Result<()> {
+    let url = api_url(server, "/api/v1/queue");
+    let response = client
+        .request(Method::DELETE, url.clone())
+        .send()
+        .await
+        .with_context(|| format!("failed to connect to {url}"))?;
+
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
+    }
+
+    let body_text = response.text().await.unwrap_or_default();
+    Err(anyhow!(
+        "clear queue failed ({status}): {body}",
+        body = body_text.trim()
+    ))
 }
 
 fn format_seconds(seconds: u32) -> String {

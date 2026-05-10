@@ -193,6 +193,28 @@ pub struct LibraryTrack {
     pub duration_s: Option<u32>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueueListing {
+    pub items: Vec<QueueItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueueItem {
+    pub position: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<u64>,
+    pub uri: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artist: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_s: Option<u32>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RescanResponse {
     pub job_id: u64,
@@ -334,7 +356,10 @@ mod tests {
 
     #[test]
     fn basename_strips_path() {
-        assert_eq!(basename("Pink Floyd/Dark Side/01 Speak to Me.flac"), "01 Speak to Me.flac");
+        assert_eq!(
+            basename("Pink Floyd/Dark Side/01 Speak to Me.flac"),
+            "01 Speak to Me.flac"
+        );
         assert_eq!(basename("Pink Floyd"), "Pink Floyd");
         assert_eq!(basename(""), "");
     }
@@ -359,5 +384,29 @@ mod tests {
         let decoded: StatusResponse = serde_json::from_str(&json).expect("status deserializes");
 
         assert_eq!(decoded, status);
+    }
+
+    #[test]
+    fn serializes_queue_listing() {
+        let listing = QueueListing {
+            items: vec![QueueItem {
+                position: 0,
+                id: Some(12),
+                uri: "Pink Floyd/single.flac".to_string(),
+                name: "single.flac".to_string(),
+                title: Some("Single".to_string()),
+                artist: Some("Pink Floyd".to_string()),
+                album: None,
+                duration_s: Some(214),
+            }],
+        };
+
+        let json = serde_json::to_value(&listing).expect("queue serializes");
+
+        assert_eq!(json["items"][0]["position"], 0);
+        assert_eq!(json["items"][0]["id"], 12);
+        assert_eq!(json["items"][0]["uri"], "Pink Floyd/single.flac");
+        assert_eq!(json["items"][0]["name"], "single.flac");
+        assert!(json["items"][0].get("album").is_none());
     }
 }

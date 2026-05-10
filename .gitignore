@@ -11,6 +11,9 @@
 .env
 config/hotspot.local.json
 
+# Captured device screenshots from screenshot.sh.
+/screenshot.png
+
 # Yocto local build state and flash-time secrets.
 /build/
 /meta-openembedded/
