@@ -4,6 +4,8 @@ const state = {
   status: null,
   queue: { items: [] },
   library: { path: "", directories: [], tracks: [] },
+  pendingQueueSelection: null,
+  queueSelectionRequestId: 0,
 };
 
 const el = {};
@@ -91,6 +93,10 @@ async function refreshStatus() {
   try {
     state.status = await getJson("/api/v1/status");
     renderStatus();
+    reconcilePendingQueueSelection();
+    if (state.tab === "queue") {
+      renderQueue();
+    }
   } catch (error) {
     showToast(error.message);
   }
@@ -299,13 +305,30 @@ async function enqueue(kind, path, label) {
 }
 
 async function playQueueItem(item) {
-  const body = { position: item.position };
-  if (item.id !== undefined && item.id !== null) {
-    body.id = item.id;
+  const requestId = ++state.queueSelectionRequestId;
+  const selection = {
+    ...queueSelectionFor(item),
+    requestId,
+  };
+  state.pendingQueueSelection = selection;
+  renderQueue();
+  scheduleQueueSelectionReconcile(requestId);
+
+  try {
+    await postJson("/api/v1/queue/play", queuePlayBody(selection));
+    if (isLatestQueueSelection(requestId)) {
+      showToast(`Playing ${item.title || item.name}`);
+      await refreshStatus();
+      await refreshQueue();
+    }
+  } catch (error) {
+    if (isLatestQueueSelection(requestId)) {
+      state.pendingQueueSelection = null;
+      renderQueue();
+      await refreshStatus();
+    }
+    throw error;
   }
-  await postJson("/api/v1/queue/play", body);
-  showToast(`Playing ${item.title || item.name}`);
-  await Promise.all([refreshStatus(), refreshQueue()]);
 }
 
 async function playback(action) {
@@ -402,6 +425,10 @@ function basename(path) {
 }
 
 function isCurrentQueueItem(item) {
+  if (queueSelectionMatchesItem(state.pendingQueueSelection, item)) {
+    return true;
+  }
+
   const playback = state.status?.playback;
   if (!playback) {
     return false;
@@ -413,6 +440,82 @@ function isCurrentQueueItem(item) {
     return Number(playback.queue_position) === Number(item.position);
   }
   return playback.track?.uri === item.uri;
+}
+
+function queueSelectionFor(item) {
+  return {
+    id: item.id ?? null,
+    position: item.position,
+    uri: item.uri,
+  };
+}
+
+function queuePlayBody(selection) {
+  const body = { position: selection.position };
+  if (selection.id !== null) {
+    body.id = selection.id;
+  }
+  return body;
+}
+
+function queueSelectionMatchesItem(selection, item) {
+  if (!selection) {
+    return false;
+  }
+  if (selection.id !== null && item.id !== undefined && item.id !== null) {
+    return Number(selection.id) === Number(item.id);
+  }
+  if (selection.position !== undefined && selection.position !== null) {
+    return Number(selection.position) === Number(item.position);
+  }
+  return selection.uri === item.uri;
+}
+
+function reconcilePendingQueueSelection() {
+  const selection = state.pendingQueueSelection;
+  const playback = state.status?.playback;
+  if (!selection || !playback) {
+    return;
+  }
+  if (queueSelectionMatchesPlayback(selection, playback)) {
+    state.pendingQueueSelection = null;
+  }
+}
+
+function queueSelectionMatchesPlayback(selection, playback) {
+  if (
+    selection.id !== null &&
+    playback.queue_id !== undefined &&
+    playback.queue_id !== null
+  ) {
+    return Number(selection.id) === Number(playback.queue_id);
+  }
+  if (
+    selection.position !== undefined &&
+    selection.position !== null &&
+    playback.queue_position !== undefined &&
+    playback.queue_position !== null
+  ) {
+    return Number(selection.position) === Number(playback.queue_position);
+  }
+  return playback.track?.uri === selection.uri;
+}
+
+function isLatestQueueSelection(requestId) {
+  return state.pendingQueueSelection?.requestId === requestId;
+}
+
+function scheduleQueueSelectionReconcile(requestId) {
+  window.setTimeout(async () => {
+    if (!isLatestQueueSelection(requestId)) {
+      return;
+    }
+    await refreshStatus();
+    if (isLatestQueueSelection(requestId)) {
+      state.pendingQueueSelection = null;
+      renderQueue();
+    }
+  }, 1800);
 }
 
 function formatSeconds(value) {
