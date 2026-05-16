@@ -312,7 +312,7 @@ Buttons should be usable without looking at a phone:
 - play/pause
 - previous
 - next
-- configurable action
+- switch networking modes: toggle between AP and Station mode
 
 Open decision:
 
@@ -423,7 +423,3 @@ System services:
   version.
 - The MVP control API is unauthenticated on that trusted local network, but API
   boundaries should remain explicit enough to add authentication later.
-
-## Open Questions
-
-- What should the fourth hardware button do?
