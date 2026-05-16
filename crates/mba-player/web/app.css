@@ -226,7 +226,7 @@ button.list-row {
 }
 
 .queue-row:hover,
-.queue-row:focus-visible {
+.queue-row:focus-within {
   border-color: #55705f;
   background: #1b211b;
 }
@@ -253,6 +253,32 @@ button.list-row {
 
 .list-row-main {
   min-width: 0;
+}
+
+.queue-play-button {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.queue-actions {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(44px, auto));
+  gap: 6px;
+}
+
+.queue-action {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 8px;
+  font-size: 0.82rem;
+  background: var(--surface);
 }
 
 .row-title {
@@ -391,5 +417,13 @@ button.list-row {
 
   .list-row {
     align-items: stretch;
+  }
+
+  .queue-row {
+    display: grid;
+  }
+
+  .queue-actions {
+    grid-template-columns: repeat(4, 1fr);
   }
 }

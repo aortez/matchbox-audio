@@ -222,17 +222,17 @@ function renderQueue() {
   }
 
   for (const item of items) {
-    const row = document.createElement("button");
+    const row = document.createElement("div");
     row.className = "list-row queue-row";
-    row.type = "button";
-    row.addEventListener("click", () => perform(() => playQueueItem(item)));
     if (isCurrentQueueItem(item)) {
       row.classList.add("current");
       row.setAttribute("aria-current", "true");
     }
 
-    const main = document.createElement("div");
-    main.className = "list-row-main";
+    const main = document.createElement("button");
+    main.className = "list-row-main queue-play-button";
+    main.type = "button";
+    main.addEventListener("click", () => perform(() => playQueueItem(item)));
 
     const title = document.createElement("span");
     title.className = "row-title";
@@ -243,7 +243,17 @@ function renderQueue() {
     meta.textContent = formatTrackMeta(item) || item.uri;
 
     main.append(title, meta);
-    row.append(main);
+
+    const actions = document.createElement("div");
+    actions.className = "queue-actions";
+    actions.append(
+      queueActionButton("Up", item.position === 0, () => moveQueueItem(item, item.position - 1)),
+      queueActionButton("Down", item.position >= items.length - 1, () => moveQueueItem(item, item.position + 1)),
+      queueActionButton("Next", !canMoveAfterCurrent(item), () => moveQueueItemNext(item)),
+      queueActionButton("Del", false, () => removeQueueItem(item)),
+    );
+
+    row.append(main, actions);
     el.queueList.appendChild(row);
   }
 }
@@ -329,6 +339,31 @@ async function playQueueItem(item) {
     }
     throw error;
   }
+}
+
+async function removeQueueItem(item) {
+  await postJson("/api/v1/queue/remove", queueItemTargetBody(item));
+  showToast(`Removed ${item.title || item.name}`);
+  clearPendingSelectionFor(item);
+  await Promise.all([refreshStatus(), refreshQueue()]);
+}
+
+async function moveQueueItem(item, toPosition) {
+  if (toPosition < 0) {
+    return;
+  }
+  await postJson("/api/v1/queue/move", {
+    ...queueItemTargetBody(item),
+    to_position: toPosition,
+  });
+  showToast(`Moved ${item.title || item.name}`);
+  await Promise.all([refreshStatus(), refreshQueue()]);
+}
+
+async function moveQueueItemNext(item) {
+  await postJson("/api/v1/queue/play-next", queueItemTargetBody(item));
+  showToast(`Queued next ${item.title || item.name}`);
+  await Promise.all([refreshStatus(), refreshQueue()]);
 }
 
 async function playback(action) {
@@ -456,6 +491,43 @@ function queuePlayBody(selection) {
     body.id = selection.id;
   }
   return body;
+}
+
+function queueItemTargetBody(item) {
+  const body = { position: item.position };
+  if (item.id !== undefined && item.id !== null) {
+    body.id = item.id;
+  }
+  return body;
+}
+
+function queueActionButton(label, disabled, action) {
+  const button = document.createElement("button");
+  button.className = label === "Del" ? "queue-action danger" : "queue-action";
+  button.type = "button";
+  button.textContent = label;
+  button.disabled = disabled;
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (!button.disabled) {
+      perform(action);
+    }
+  });
+  return button;
+}
+
+function canMoveAfterCurrent(item) {
+  const playback = state.status?.playback;
+  if (!playback || playback.queue_position === undefined || playback.queue_position === null) {
+    return false;
+  }
+  return !isCurrentQueueItem(item);
+}
+
+function clearPendingSelectionFor(item) {
+  if (queueSelectionMatchesItem(state.pendingQueueSelection, item)) {
+    state.pendingQueueSelection = null;
+  }
 }
 
 function queueSelectionMatchesItem(selection, item) {

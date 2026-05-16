@@ -51,9 +51,19 @@ enum Action {
     Stop,
     Next,
     Previous,
-    Seek { seconds: f64 },
-    SetVolume { level: u8 },
-    PlayQueue(QueuePlaybackTarget),
+    Seek {
+        seconds: f64,
+    },
+    SetVolume {
+        level: u8,
+    },
+    PlayQueue(QueueItemTarget),
+    RemoveQueue(QueueItemTarget),
+    MoveQueue {
+        target: QueueItemTarget,
+        to_position: u32,
+    },
+    MoveQueueAfterCurrent(QueueItemTarget),
 }
 
 #[derive(Debug)]
@@ -104,7 +114,7 @@ impl Request {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QueuePlaybackTarget {
+pub enum QueueItemTarget {
     Id(u64),
     Position(u32),
 }
@@ -152,8 +162,32 @@ impl MpdHandle {
         self.send_action(Action::SetVolume { level }).await
     }
 
-    pub async fn play_queue_item(&self, target: QueuePlaybackTarget) -> Result<(), MpdError> {
+    pub async fn play_queue_item(&self, target: QueueItemTarget) -> Result<(), MpdError> {
         self.send_action(Action::PlayQueue(target)).await
+    }
+
+    pub async fn remove_queue_item(&self, target: QueueItemTarget) -> Result<(), MpdError> {
+        self.send_action(Action::RemoveQueue(target)).await
+    }
+
+    pub async fn move_queue_item(
+        &self,
+        target: QueueItemTarget,
+        to_position: u32,
+    ) -> Result<(), MpdError> {
+        self.send_action(Action::MoveQueue {
+            target,
+            to_position,
+        })
+        .await
+    }
+
+    pub async fn move_queue_item_after_current(
+        &self,
+        target: QueueItemTarget,
+    ) -> Result<(), MpdError> {
+        self.send_action(Action::MoveQueueAfterCurrent(target))
+            .await
     }
 
     pub async fn rescan(&self) -> Result<u64, MpdError> {
@@ -398,17 +432,25 @@ async fn handle_action(
             .await
             .map_err(|e| e.to_string()),
         Action::PlayQueue(target) => match target {
-            QueuePlaybackTarget::Id(id) => client
+            QueueItemTarget::Id(id) => client
                 .command(commands::Play::song(commands::SongId(id)))
                 .await
                 .map_err(|e| e.to_string()),
-            QueuePlaybackTarget::Position(position) => client
+            QueueItemTarget::Position(position) => client
                 .command(commands::Play::song(commands::SongPosition(
                     position as usize,
                 )))
                 .await
                 .map_err(|e| e.to_string()),
         },
+        Action::RemoveQueue(target) => remove_queue_item(client, target).await,
+        Action::MoveQueue {
+            target,
+            to_position,
+        } => move_queue_item(client, target, to_position).await,
+        Action::MoveQueueAfterCurrent(target) => {
+            move_queue_item_after_current(client, target).await
+        }
     };
 
     match outcome {
@@ -421,6 +463,89 @@ async fn handle_action(
         }
     }
     true
+}
+
+async fn remove_queue_item(client: &Client, target: QueueItemTarget) -> Result<(), String> {
+    match target {
+        QueueItemTarget::Id(id) => client
+            .command(commands::Delete::id(commands::SongId(id)))
+            .await
+            .map_err(|e| e.to_string()),
+        QueueItemTarget::Position(position) => client
+            .command(commands::Delete::position(commands::SongPosition(
+                position as usize,
+            )))
+            .await
+            .map_err(|e| e.to_string()),
+    }
+}
+
+async fn move_queue_item(
+    client: &Client,
+    target: QueueItemTarget,
+    to_position: u32,
+) -> Result<(), String> {
+    client
+        .command(move_queue_command(target, to_position))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+async fn move_queue_item_after_current(
+    client: &Client,
+    target: QueueItemTarget,
+) -> Result<(), String> {
+    let status = client
+        .command(commands::Status)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if queue_target_matches_current(target, status.current_song) {
+        return Ok(());
+    }
+
+    let command = if status.current_song.is_some() {
+        move_queue_command_after_current(target)
+    } else {
+        move_queue_command(target, 0)
+    };
+
+    client.command(command).await.map_err(|e| e.to_string())
+}
+
+fn move_queue_command(target: QueueItemTarget, to_position: u32) -> commands::Move {
+    let to_position = commands::SongPosition(to_position as usize);
+    match target {
+        QueueItemTarget::Id(id) => {
+            commands::Move::id(commands::SongId(id)).to_position(to_position)
+        }
+        QueueItemTarget::Position(position) => {
+            commands::Move::position(commands::SongPosition(position as usize))
+                .to_position(to_position)
+        }
+    }
+}
+
+fn move_queue_command_after_current(target: QueueItemTarget) -> commands::Move {
+    match target {
+        QueueItemTarget::Id(id) => commands::Move::id(commands::SongId(id)).after_current(0),
+        QueueItemTarget::Position(position) => {
+            commands::Move::position(commands::SongPosition(position as usize)).after_current(0)
+        }
+    }
+}
+
+fn queue_target_matches_current(
+    target: QueueItemTarget,
+    current: Option<(commands::SongPosition, commands::SongId)>,
+) -> bool {
+    match (target, current) {
+        (QueueItemTarget::Id(id), Some((_, current_id))) => id == current_id.0,
+        (QueueItemTarget::Position(position), Some((current_position, _))) => {
+            position as usize == current_position.0
+        }
+        _ => false,
+    }
 }
 
 async fn handle_rescan(client: &Client, reply: oneshot::Sender<Result<u64, MpdError>>) -> bool {
@@ -952,5 +1077,31 @@ mod tests {
         assert!(!queue_transition_should_autoplay(0, 0));
         assert!(!queue_transition_should_autoplay(1, 2));
         assert!(!queue_transition_should_autoplay(3, 3));
+    }
+
+    #[test]
+    fn queue_target_matches_current_by_id_or_position() {
+        let current = Some((commands::SongPosition(4), commands::SongId(99)));
+
+        assert!(queue_target_matches_current(
+            QueueItemTarget::Id(99),
+            current
+        ));
+        assert!(queue_target_matches_current(
+            QueueItemTarget::Position(4),
+            current
+        ));
+        assert!(!queue_target_matches_current(
+            QueueItemTarget::Id(100),
+            current
+        ));
+        assert!(!queue_target_matches_current(
+            QueueItemTarget::Position(5),
+            current
+        ));
+        assert!(!queue_target_matches_current(
+            QueueItemTarget::Position(4),
+            None
+        ));
     }
 }

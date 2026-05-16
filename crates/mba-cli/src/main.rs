@@ -67,6 +67,34 @@ enum Command {
     },
     /// Show the current playback queue.
     Queue,
+    /// Remove an item from the current playback queue.
+    QueueRemove {
+        /// Stable MPD queue id. Preferred when available from `mba-cli queue`.
+        #[arg(long)]
+        id: Option<u64>,
+        /// Zero-based queue position.
+        position: Option<u32>,
+    },
+    /// Move an item to a zero-based queue position.
+    QueueMove {
+        /// Stable MPD queue id. Preferred when available from `mba-cli queue`.
+        #[arg(long)]
+        id: Option<u64>,
+        /// Zero-based destination queue position for `--id`.
+        #[arg(long, value_name = "POSITION")]
+        to: Option<u32>,
+        /// Position arguments. Use `<from> <to>`, or `<to>` with `--id`.
+        #[arg(value_name = "POSITION")]
+        positions: Vec<u32>,
+    },
+    /// Move an item immediately after the current track.
+    QueueNext {
+        /// Stable MPD queue id. Preferred when available from `mba-cli queue`.
+        #[arg(long)]
+        id: Option<u64>,
+        /// Zero-based queue position.
+        position: Option<u32>,
+    },
     /// Clear the current playback queue.
     Clear,
     /// Capture the current LCD framebuffer as a PNG.
@@ -124,6 +152,18 @@ async fn main() -> Result<()> {
             enqueue_path(&client, cli.server, "directories", path).await
         }
         Command::Queue => show_queue(&client, cli.server).await,
+        Command::QueueRemove { id, position } => {
+            let body = queue_target_body(id, position)?;
+            post_queue_edit(&client, cli.server, "remove", body).await
+        }
+        Command::QueueMove { id, to, positions } => {
+            let body = queue_move_body(id, to, positions)?;
+            post_queue_edit(&client, cli.server, "move", body).await
+        }
+        Command::QueueNext { id, position } => {
+            let body = queue_target_body(id, position)?;
+            post_queue_edit(&client, cli.server, "play-next", body).await
+        }
         Command::Clear => clear_queue(&client, cli.server).await,
         Command::Screenshot { output, socket } => capture_screenshot(socket, output).await,
     }
@@ -361,6 +401,84 @@ async fn show_queue(client: &Client, server: Url) -> Result<()> {
     Ok(())
 }
 
+fn queue_target_body(id: Option<u64>, position: Option<u32>) -> Result<serde_json::Value> {
+    if id.is_none() && position.is_none() {
+        return Err(anyhow!("queue item target requires --id or position"));
+    }
+
+    let mut body = serde_json::Map::new();
+    if let Some(position) = position {
+        body.insert("position".to_string(), serde_json::json!(position));
+    }
+    if let Some(id) = id {
+        body.insert("id".to_string(), serde_json::json!(id));
+    }
+    Ok(serde_json::Value::Object(body))
+}
+
+fn queue_move_body(
+    id: Option<u64>,
+    to: Option<u32>,
+    positions: Vec<u32>,
+) -> Result<serde_json::Value> {
+    let (position, to_position) = match (id, to, positions.as_slice()) {
+        (Some(_), Some(to_position), []) => (None, to_position),
+        (Some(_), None, [to_position]) => (None, *to_position),
+        (Some(_), Some(_), [_]) => {
+            return Err(anyhow!(
+                "use either --to or a positional destination, not both"
+            ));
+        }
+        (Some(_), _, _) => {
+            return Err(anyhow!(
+                "queue-move with --id requires exactly one destination position"
+            ));
+        }
+        (None, None, [position, to_position]) => (Some(*position), *to_position),
+        (None, Some(to_position), [position]) => (Some(*position), to_position),
+        (None, Some(_), []) => {
+            return Err(anyhow!(
+                "queue-move without --id requires a source position"
+            ));
+        }
+        (None, _, _) => {
+            return Err(anyhow!(
+                "queue-move requires <from> <to>, or --id <id> <to>"
+            ));
+        }
+    };
+
+    let mut body = queue_target_body(id, position)?;
+    body["to_position"] = serde_json::json!(to_position);
+    Ok(body)
+}
+
+async fn post_queue_edit(
+    client: &Client,
+    server: Url,
+    action: &str,
+    body: serde_json::Value,
+) -> Result<()> {
+    let url = api_url(server, &format!("/api/v1/queue/{action}"));
+    let response = client
+        .post(url.clone())
+        .json(&body)
+        .send()
+        .await
+        .with_context(|| format!("failed to connect to {url}"))?;
+
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
+    }
+
+    let body_text = response.text().await.unwrap_or_default();
+    Err(anyhow!(
+        "queue {action} failed ({status}): {body}",
+        body = body_text.trim()
+    ))
+}
+
 async fn clear_queue(client: &Client, server: Url) -> Result<()> {
     let url = api_url(server, "/api/v1/queue");
     let response = client
@@ -391,4 +509,39 @@ fn api_url(mut server: Url, path: &str) -> Url {
     server.set_path(path);
     server.set_query(None);
     server
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn queue_target_body_prefers_id_but_keeps_position_fallback() {
+        let body = queue_target_body(Some(42), Some(3)).expect("body");
+
+        assert_eq!(body["id"], 42);
+        assert_eq!(body["position"], 3);
+    }
+
+    #[test]
+    fn queue_target_body_requires_a_target() {
+        assert!(queue_target_body(None, None).is_err());
+    }
+
+    #[test]
+    fn queue_move_body_accepts_position_pair() {
+        let body = queue_move_body(None, None, vec![2, 0]).expect("body");
+
+        assert_eq!(body["position"], 2);
+        assert_eq!(body["to_position"], 0);
+    }
+
+    #[test]
+    fn queue_move_body_accepts_id_and_destination() {
+        let body = queue_move_body(Some(99), None, vec![1]).expect("body");
+
+        assert_eq!(body["id"], 99);
+        assert_eq!(body["to_position"], 1);
+        assert!(body.get("position").is_none());
+    }
 }

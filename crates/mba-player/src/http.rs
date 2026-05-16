@@ -17,7 +17,7 @@ use serde::Deserialize;
 use tokio::{process::Command, time::timeout};
 use tracing::warn;
 
-use crate::mpd::{MpdError, MpdHandle, QueuePlaybackTarget};
+use crate::mpd::{MpdError, MpdHandle, QueueItemTarget};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
 const APP_CSS: &str = include_str!("../web/app.css");
@@ -48,6 +48,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/library/rescan", post(rescan))
         .route("/api/v1/queue", get(queue).delete(clear_queue))
         .route("/api/v1/queue/play", post(play_queue_item))
+        .route("/api/v1/queue/play-next", post(play_queue_item_next))
+        .route("/api/v1/queue/remove", post(remove_queue_item))
+        .route("/api/v1/queue/move", post(move_queue_item))
         .route("/api/v1/queue/files", post(enqueue_file))
         .route("/api/v1/queue/directories", post(enqueue_directory))
         .with_state(state)
@@ -193,26 +196,60 @@ async fn clear_queue(State(state): State<AppState>) -> Result<StatusCode, ApiErr
 }
 
 #[derive(Debug, Deserialize)]
-struct QueuePlayRequest {
+struct QueueItemTargetRequest {
     id: Option<u64>,
     position: Option<u32>,
 }
 
 async fn play_queue_item(
     State(state): State<AppState>,
-    Json(req): Json<QueuePlayRequest>,
+    Json(req): Json<QueueItemTargetRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let target = queue_play_target(req)?;
+    let target = queue_item_target(req.id, req.position)?;
     state.mpd.play_queue_item(target).await?;
     Ok(StatusCode::ACCEPTED)
 }
 
-fn queue_play_target(req: QueuePlayRequest) -> Result<QueuePlaybackTarget, ApiError> {
-    if let Some(id) = req.id {
-        return Ok(QueuePlaybackTarget::Id(id));
+async fn play_queue_item_next(
+    State(state): State<AppState>,
+    Json(req): Json<QueueItemTargetRequest>,
+) -> Result<StatusCode, ApiError> {
+    let target = queue_item_target(req.id, req.position)?;
+    state.mpd.move_queue_item_after_current(target).await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+async fn remove_queue_item(
+    State(state): State<AppState>,
+    Json(req): Json<QueueItemTargetRequest>,
+) -> Result<StatusCode, ApiError> {
+    let target = queue_item_target(req.id, req.position)?;
+    state.mpd.remove_queue_item(target).await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+#[derive(Debug, Deserialize)]
+struct QueueMoveRequest {
+    id: Option<u64>,
+    position: Option<u32>,
+    to_position: u32,
+}
+
+async fn move_queue_item(
+    State(state): State<AppState>,
+    Json(req): Json<QueueMoveRequest>,
+) -> Result<StatusCode, ApiError> {
+    let target = queue_item_target(req.id, req.position)?;
+    state.mpd.move_queue_item(target, req.to_position).await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+fn queue_item_target(id: Option<u64>, position: Option<u32>) -> Result<QueueItemTarget, ApiError> {
+    if let Some(id) = id {
+        return Ok(QueueItemTarget::Id(id));
     }
-    if let Some(position) = req.position {
-        return Ok(QueuePlaybackTarget::Position(position));
+    if let Some(position) = position {
+        return Ok(QueueItemTarget::Position(position));
     }
     Err(ApiError::bad_request("id or position is required"))
 }
@@ -372,35 +409,23 @@ mod tests {
     }
 
     #[test]
-    fn queue_play_target_prefers_stable_id() {
+    fn queue_item_target_prefers_stable_id() {
         assert_eq!(
-            queue_play_target(QueuePlayRequest {
-                id: Some(42),
-                position: Some(3),
-            })
-            .expect("target"),
-            QueuePlaybackTarget::Id(42)
+            queue_item_target(Some(42), Some(3)).expect("target"),
+            QueueItemTarget::Id(42)
         );
     }
 
     #[test]
-    fn queue_play_target_accepts_position_fallback() {
+    fn queue_item_target_accepts_position_fallback() {
         assert_eq!(
-            queue_play_target(QueuePlayRequest {
-                id: None,
-                position: Some(3),
-            })
-            .expect("target"),
-            QueuePlaybackTarget::Position(3)
+            queue_item_target(None, Some(3)).expect("target"),
+            QueueItemTarget::Position(3)
         );
     }
 
     #[test]
-    fn queue_play_target_rejects_empty_request() {
-        assert!(queue_play_target(QueuePlayRequest {
-            id: None,
-            position: None,
-        })
-        .is_err());
+    fn queue_item_target_rejects_empty_request() {
+        assert!(queue_item_target(None, None).is_err());
     }
 }

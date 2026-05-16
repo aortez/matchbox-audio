@@ -258,8 +258,10 @@ file/directory enqueue actions, and a queue view. Queue rows can now jump
 directly to that queued item through `POST /api/v1/queue/play`, preferring
 MPD's stable queue id and falling back to position, with an optimistic highlight
 while backend playback status catches up. Directory rows open from the full row
-except for the `Add` button. Broader visual polish and richer queue editing
-remain open. Search is deferred.
+except for the `Add` button. Queue editing now supports removing queued items,
+moving items up/down or to an absolute position, and moving an item immediately
+after the current track through the API, CLI, and web controller. Broader visual
+polish remains open. Search is deferred.
 
 Car-mode phone verification confirmed the web controller works from the
 `matchbox-audio` hotspot at `http://10.42.0.1:8090/` with cellular data
