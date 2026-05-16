@@ -125,7 +125,7 @@ home mode.
   - [x] `matchbox` as SSH/deploy/admin user
   - [x] `mba-player` as unprivileged app daemon user
   - [x] `mba-device` as root or hardware-capable service user
-  - [ ] `mpd` as playback daemon user
+  - [x] `mpd` as playback daemon user
 - [x] Replace broad `matchbox ALL=(ALL) NOPASSWD: ALL` sudo with an allowlist.
 - [x] Allow `matchbox` only the deployment/admin commands it needs:
   - [x] A/B update helpers
@@ -139,7 +139,7 @@ home mode.
 - [x] Define `/data` ownership and modes:
   - [x] `/data/music` writable by SSH/admin workflow
   - [x] `/data/matchbox-audio/state` writable by Matchbox app services
-  - [ ] `/data/mpd` writable by MPD
+  - [x] `/data/mpd` writable by MPD
   - [x] hotspot/network state readable only as needed
 - [x] Stop exposing hotspot password in unauthenticated status by default, or
   gate it behind a local/admin-only path.
@@ -175,30 +175,208 @@ lands.
 
 ## Phase 3: MPD on Target
 
-- [ ] Add MPD to the Yocto image.
-- [ ] Configure MPD to bind locally only.
-- [ ] Use `127.0.0.1:6600` initially.
+- [x] Add MPD to the Yocto image.
+- [x] Configure MPD to bind locally only.
+- [x] Use `127.0.0.1:6600` initially.
 - [ ] Keep Unix socket support as an optional later refinement.
-- [ ] Configure MPD music, database, playlist, and state paths under `/data`.
-- [ ] Add or configure `mpd.service`.
-- [ ] Configure minimal PIM483 I2S line-out audio.
-- [ ] Keep ALSA/DAC output at fixed line level.
-- [ ] Configure MPD software volume with maximum and startup volume caps.
-- [ ] Verify clean MPD playback through PIM483 line-out on the Pi.
-- [ ] Select Rust MPD client crate or implement minimal MPD protocol client.
-- [ ] Implement `mba-player` MPD connection management.
-- [ ] Implement playback commands:
-  - [ ] play
-  - [ ] pause
-  - [ ] toggle
-  - [ ] stop
-  - [ ] next
-  - [ ] previous
-  - [ ] seek
-  - [ ] volume
-- [ ] Add CLI support for playback commands.
-- [ ] Verify commands remotely with `mba-cli`.
-- [ ] Implement status polling or MPD idle/event integration.
+- [x] Configure MPD music, database, playlist, and state paths under `/data`.
+- [x] Add or configure `mpd.service`.
+- [x] Configure minimal PIM483 I2S line-out audio.
+- [x] Keep ALSA/DAC output at fixed line level.
+- [x] Configure MPD software volume with startup volume cap.
+- [x] Verify MPD playback reaches the PIM483 ALSA output on the Pi.
+- [x] Verify clean analog line-out by listening through the PIM483 output.
+- [x] Integrate the `mpd_client` crate in `mba-player`.
+- [x] Implement `mba-player` MPD connection management.
+- [x] Implement playback commands:
+  - [x] play
+  - [x] pause
+  - [x] toggle
+  - [x] stop
+  - [x] next
+  - [x] previous
+  - [x] seek
+  - [x] volume
+- [x] Add CLI support for playback commands.
+- [x] Verify commands remotely with `mba-cli`.
+- [x] Implement status polling or MPD idle/event integration.
+
+Phase 3 landing plan: the Phase 3 checklist is delivered as five incremental
+landings so each step ends with a deployable, verified image.
+
+- Landing A — MPD on target (no audio): package `mpd` and `mpc` from
+  meta-multimedia, bind MPD to `127.0.0.1:6600`, run as `mpd:mpd`, route
+  state under `/data/mpd`, harden the unit, and prove it on the device with
+  a `null` output. Done.
+- Landing B — PIM483 audio path: confirm the `hifiberry-dac` overlay is
+  active, set ALSA's default to the I2S card, replace MPD's `null` output
+  with an ALSA output to the DAC, enable MPD's software mixer, clamp startup
+  volume to `60`, sync a small test track to `/data/music`, verify MPD playback
+  through the PIM483 output, and confirm clean analog line-out by listening.
+  MPD 0.23.14 does not provide a supported `mixer_max_volume` setting; the
+  device drives a line-out into an external amp, so the previously planned
+  user-facing volume cap was dropped rather than moved to `mba-player`.
+- Landing C — `mba-player` ↔ MPD IPC and basic UI: integrate the
+  `mpd_client` crate, run a command connection plus a long-lived `idle`
+  connection, cache `PlaybackState` so `GET /api/v1/status` is a memory read,
+  expose `play`/`pause`/`toggle`/`stop`/`next`/`previous`/`seek`/`volume`
+  through the API and `mba-cli` (volume validates `0..=100` with no cap —
+  the line-out has no equipment to protect), extend `/api/v1/status` with a
+  `playback {state, volume, queue_position, queue_id, track {uri, title,
+  artist, album, duration_s, elapsed_s} | null, queue_length}` subobject, and
+  rework the PIM483 panel
+  from a single column into three horizontal bands (network, now-playing,
+  footer hint) so it doubles as a basic playback UI for hands-on use. The
+  intended layout is captured below the landing list.
+- Landing D — Library and database refresh: ingestion is host-side `rsync`
+  push driven by `npm run music-sync`, which reads
+  `~/.config/matchbox-audio/sync.json` (source/host/user defaults) and pushes
+  to `/data/music/` over SSH; the script then triggers an MPD update via
+  `POST /api/v1/library/rescan`. The API also exposes
+  `GET /api/v1/library?path=...` for single-level folder browsing
+  (matches MPD's `lsinfo`), and `mba-cli` gains `rescan` and `library [path]`
+  subcommands. Scans run server-side in MPD so the actor task is not blocked,
+  keeping playback commands responsive during a refresh.
+- Landing E — End-to-end through the UI surface: bind the PIM483 play/pause/
+  previous/next buttons to the playback API, polish the placeholder web page
+  into a usable controller (status + queue + browse), regression-test the
+  golden path (boot → hotspot → enqueue → play → skip → volume), and extend
+  the hardening test to cover any new sudo/file-permission surface introduced
+  in C–D.
+
+Landing E partial status: on May 9, 2026, the PIM483 A/B/X transport buttons
+were bound to the existing `POST /api/v1/playback/*` endpoints through
+`mba-player` and MPD: A toggles play/pause, B skips to previous, and X skips to
+next. The queue backend also exposes `GET`/`DELETE /api/v1/queue`,
+`POST /api/v1/queue/files`, and `POST /api/v1/queue/directories`, with matching
+`mba-cli queue`, `clear`, `enqueue`/`enqueue-file`, and `enqueue-dir` commands.
+Enqueue now starts playback automatically when the queue was empty and the add
+leaves MPD with at least one queued item.
+The first-pass static web app is embedded in `mba-player` with no frontend build
+step: it provides status polling, transport controls, volume, library browsing,
+file/directory enqueue actions, and a queue view. Queue rows can now jump
+directly to that queued item through `POST /api/v1/queue/play`, preferring
+MPD's stable queue id and falling back to position, with an optimistic highlight
+while backend playback status catches up. Directory rows open from the full row
+except for the `Add` button. Queue editing now supports removing queued items,
+moving items up/down or to an absolute position, and moving an item immediately
+after the current track through the API, CLI, and web controller. Broader visual
+polish remains open. Search is deferred.
+
+Car-mode phone verification confirmed the web controller works from the
+`matchbox-audio` hotspot at `http://10.42.0.1:8090/` with cellular data
+disabled: transport controls responded and audio playback continued through the
+PIM483 line-out. The `.local` hostname remains convenience-only; the fixed
+hotspot IP is the supported deterministic URL.
+
+Landing C PIM483 display sketch:
+
+```
+┌─ Matchbox Audio ───────┐
+│ HOME · onionchan       │
+│ 192.168.1.102          │
+├────────────────────────┤
+│ ▶ Track Title          │
+│   Artist — Album       │
+│ 01:23 / 04:05    ♪ 65  │
+├────────────────────────┤
+│ Hold Y for network     │
+└────────────────────────┘
+```
+
+When no track is loaded the now-playing band shows `idle`. The footer hint
+remains the existing `Hold Y for network` action; later landings can rotate
+this slot for transient messages (scan progress, errors, etc.).
+
+Phase 3 Landing A status note: on May 9, 2026, the Yocto image gained the
+upstream `mpd` and `mpc` packages from `meta-multimedia` via a bbappend that
+ships a Matchbox `mpd.conf`, drops a hardened `mpd.service` drop-in, narrows
+PACKAGECONFIG to `alsa daemon flac mpg123 vorbis`, and removes the unused
+`mpd.socket`. MPD runs as user `mpd` with audio-device group `audio`, binds
+`127.0.0.1:6600`, and stores its
+database, playlists, and state under `/data/mpd` (created by `mba-data-init`
+with `mpd:mpd 0750`). Audio output is a `null` sink for now; the PIM483 ALSA
+wiring lands in Landing B. The hardened image was A/B deployed to slot `b` on
+`matchbox-audio.local` and `npm run hardening` passed end-to-end, including
+new checks for the MPD service, bind address, ProtectSystem=strict, and
+`/data/mpd` ownership. `mpc status` and `mpc update` work over SSH; the
+running `matchbox` user can also `sudo systemctl restart mpd.service`.
+
+Phase 3 Landing B status note: on May 9, 2026, the Yocto image gained a
+Matchbox `alsa-state` bbappend that installs `/etc/asound.conf` with the
+default PCM/control device pointed at card `0`, the PIM483/HifiBerry DAC created
+by the existing `hifiberry-dac` overlay and `dtparam=audio=off` boot config.
+MPD now uses an ALSA output named `matchbox-pim483-lineout` with
+`mixer_type "software"` instead of the Landing A `null` output. A hardened
+`mba-mpd-startup-volume.service` runs after `mpd.service` as `mpd:audio` and
+clamps boot volume to `60` when the saved software volume is unset or higher
+than that. The image also installs `alsa-utils-aplay`, and the `matchbox` admin
+user is in the `audio` group so SSH diagnostics can inspect ALSA devices without
+restoring broad sudo. The image was A/B deployed to slot `b` on
+`matchbox-audio.local`; remote smoke and hardening tests passed, including
+checks for the PIM483 ALSA card, MPD output, startup-volume service, and
+`matchbox` audio diagnostics. A generated FLAC test tone was synced to
+`/data/music/_landing-b-test/test-tone.flac`, scanned by MPD, queued, and played
+through MPD with no `mpd.service` journal errors. Physical listening through the
+analog line-out confirmed the test tone was audible; MPD volume was returned to
+`60` afterward.
+
+Phase 3 Landing C status note: on May 9, 2026, `mba-player` gained an MPD
+client built on the `mpd_client` crate. A spawned actor task owns the single
+client connection, listens to MPD's `idle` events for `player`, `mixer`, and
+`playlist` (queue) subsystems, and caches a `PlaybackInfo` in a
+`tokio::sync::watch` so `GET /api/v1/status` is a memory read. Eight new
+`POST /api/v1/playback/*` routes (`play`, `pause`, `toggle`, `stop`, `next`,
+`previous`, `seek`, `volume`) forward to the actor; reconnect with
+exponential backoff (500 ms → 10 s) drains pending commands as
+`MpdError::Unavailable` so HTTP requests fail fast while MPD is down. `mba-cli`
+exposes the same verbs (`mba-cli play | pause | toggle | stop | next | prev |
+seek <secs> | volume <0-100>`) and prints the new `playback_*` fields in
+`mba-cli status`. Volume validates `0..=100` only — no software cap, since
+the PIM483 line-out feeds an external amp. The startup volume default is `60`,
+which is a better listening baseline than the original conservative `40` while
+still leaving headroom through the external amp. The placeholder web page picked
+up a denser layout split into service, network, and playback rows. The PIM483
+panel was rewritten
+into three horizontal bands: a network band (`MODE · connection` plus
+address, or `MODE · hotspot-ssid` plus `pass <password>` in car mode), a
+now-playing band (state glyph + title, artist/album, elapsed/duration on
+the left and `vol N` right-aligned), and a footer hint that still hosts
+`Hold Y for network`. Transport state uses ASCII `>` / `||` / `[]` because
+the iso_8859_1 fonts do not carry the Unicode glyphs. The hardened image was
+A/B deployed to slot `a` on `matchbox-audio.local`; `npm run smoke` and
+`npm run hardening` both passed, including new playback checks
+(`mba-cli status` reports the playback fields and `mba-cli volume 80`
+sets MPD volume). End-to-end verification drove an MPD queue with the
+Landing B test tone through `mba-cli play`, `toggle`, `next`, `seek`,
+`volume`, and `stop`; each command was reflected in `mpc status` and
+audible through the headphone line-out.
+
+Phase 3 Landing D status note: on May 9, 2026, `mba-player` gained library
+endpoints. `POST /api/v1/library/rescan` triggers MPD's `update` and returns
+`{job_id}` immediately so the actor stays responsive while MPD scans
+server-side. `GET /api/v1/library?path=...` calls MPD `lsinfo` and returns
+single-level folders + tracks (`{path, directories: [{name, path}], tracks:
+[{uri, name, title?, artist?, album?, duration_s?}]}`) — recursive walks are
+deferred to the Phase 4 browse work. `mba-cli` exposes `rescan` and
+`library [path]`. Host-side ingestion is `npm run music-sync`, a Node script
+that reads repo-local `config/sync.local.json` (with `--source/--host/--user/
+--port/--dry-run/--no-delete` overrides), runs
+`rsync -av --delete --exclude=.DS_Store ...` to `matchbox@<host>:/data/music/`,
+then POSTs to `/api/v1/library/rescan`. An example config lives at
+`config/sync.local.example.json`. The matchbox-audio recipe was
+updated so `do_compile[file-checksums]` covers every per-crate `Cargo.toml`
+plus all `crates/*/src/**.rs` — without that, source-only edits don't
+invalidate the cache and the image keeps shipping the old binary. The
+hardened image was A/B deployed to slot `b` on `matchbox-audio.local`;
+`npm run smoke` passed including the new `rescan` and `library` checks. End-
+to-end verification synced `~/Music/A` (~84 MB), confirmed the listing showed
+`Air/` at root and `Ari - Moon Safari ... .ogg` inside it, and started
+playback then triggered `mba-cli rescan` mid-track — the actor returned the
+job id immediately and `mpc pause` still responded promptly with the track
+holding at 0:03. The single `.opus` file at the root did not appear in
+listings because MPD was built without the opus decoder; broader codec
+support is deferred to Phase 4.
 
 ## Phase 4: Filesystem Library Browsing and Queueing
 
@@ -207,9 +385,8 @@ lands.
 - [ ] Ignore hidden files and directories by default.
 - [ ] Use case-insensitive audio extension filtering.
 - [ ] Implement `GET /api/v1/library/list?path=...`.
-- [ ] Implement path search.
-- [ ] Implement queue by file.
-- [ ] Implement queue by directory.
+- [x] Implement queue by file.
+- [x] Implement queue by directory.
 - [ ] Define stable recursive directory ordering:
   - [ ] depth-first traversal
   - [ ] directories before files
@@ -222,9 +399,10 @@ lands.
 - [ ] Keep Phase 4 browsing and queueing filesystem/path-only.
 - [ ] Add CLI commands:
   - [ ] `mba-cli list`
-  - [ ] `mba-cli search`
-  - [ ] `mba-cli enqueue-file`
-  - [ ] `mba-cli enqueue-dir`
+  - [x] `mba-cli queue`
+  - [x] `mba-cli clear`
+  - [x] `mba-cli enqueue-file`
+  - [x] `mba-cli enqueue-dir`
 - [ ] Test with files synced by SSH/`rsync` to `/data/music`.
 - [ ] Add filesystem traversal tests.
 
@@ -243,24 +421,24 @@ lands.
 
 ## Phase 6: Minimal Web App on Device
 
-- [ ] Choose web app stack.
-- [ ] Serve static web app from `mba-player`.
-- [ ] Implement playback status and controls.
-- [ ] Implement directory/file browser.
-- [ ] Implement file and directory enqueue actions.
-- [ ] Implement queue view.
-- [ ] Implement path search.
-- [ ] Verify the app works without internet access.
-- [ ] Verify the app over the Pi hotspot.
+- [x] Choose web app stack.
+- [x] Serve static web app from `mba-player`.
+- [x] Implement playback status and controls.
+- [x] Implement directory/file browser.
+- [x] Implement file and directory enqueue actions.
+- [x] Implement queue view.
+- [x] Implement queue item selection/playback.
+- [x] Verify the app works without internet access.
+- [x] Verify the app over the Pi hotspot.
 
 ## Phase 7: Pirate Audio Display and Button Bring-Up
 
 - [x] Configure PIM483 ST7789 display.
 - [x] Configure PIM483 buttons.
 - [ ] Implement button handling:
-  - [ ] play/pause
-  - [ ] previous
-  - [ ] next
+  - [x] play/pause
+  - [x] previous
+  - [x] next
   - [x] fourth button placeholder/configurable action
 - [ ] Implement compact display states:
   - [ ] booting
@@ -279,9 +457,9 @@ short press only prompts the hold action on the display. Remote verification on
 `matchbox-audio.local` confirms the service is active, SPI devices exist, and
 display refreshes no longer report write failures. Physical Y-button validation
 confirmed a long press switches `wlan0` from home Wi-Fi to the
-`matchbox-audio` hotspot in car mode. The play/pause, previous, and next
-buttons are intentionally still unbound until playback control exists; for now
-they emit short/long press logs so the physical buttons can be validated.
+`matchbox-audio` hotspot in car mode. After Landing C/D playback APIs landed,
+the A/B/X buttons were wired to `mba-player`'s playback endpoints, so A toggles
+play/pause, B skips to previous, and X skips to next for the current MPD queue.
 
 ## Phase 8: Metadata and Artwork Cache
 
@@ -324,3 +502,4 @@ they emit short/long press logs so the physical buttons can be validated.
 - [ ] BLE control or provisioning.
 - [ ] Bluetooth audio sink mode.
 - [ ] USB mass-storage maintenance mode.
+- [ ] Library/path search across web, API, and CLI.

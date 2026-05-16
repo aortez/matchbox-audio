@@ -1,23 +1,34 @@
 use std::{
     convert::Infallible,
+    io::Write as _,
+    os::unix::{
+        fs::PermissionsExt,
+        net::{UnixListener, UnixStream},
+    },
+    path::{Path, PathBuf},
     process::Command,
+    sync::mpsc::{self, SyncSender},
     thread,
     time::{Duration, Instant},
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use embedded_graphics::{
     draw_target::DrawTarget,
     geometry::{OriginDimensions, Point, Size},
-    mono_font::{ascii::FONT_10X20, ascii::FONT_6X10, MonoTextStyle},
+    mono_font::{
+        ascii::FONT_10X20,
+        iso_8859_1::{FONT_6X10, FONT_8X13, FONT_8X13_BOLD},
+        MonoTextStyle,
+    },
     pixelcolor::{raw::RawU16, Rgb565},
     prelude::*,
     primitives::{PrimitiveStyle, Rectangle},
     text::Text,
     Pixel,
 };
-use mba_protocol::NetworkMode;
+use mba_protocol::{NetworkMode, PlaybackInfo, PlaybackState, StatusResponse, TrackInfo};
 use rppal::{
     gpio::{Gpio, InputPin, Level, OutputPin},
     spi::{Bus, Mode, SlaveSelect, Spi},
@@ -40,6 +51,11 @@ const SPI_WRITE_CHUNK: usize = 4096;
 const DISPLAY_DC_PIN: u8 = 9;
 const DISPLAY_BACKLIGHT_PIN: u8 = 13;
 const DISPLAY_SPI_CLOCK_HZ: u32 = 62_500_000;
+
+const DEFAULT_SNAPSHOT_SOCKET: &str = "/run/mba-device/snapshot.sock";
+const SNAPSHOT_REPLY_TIMEOUT: Duration = Duration::from_secs(5);
+
+type SnapshotReply = SyncSender<Vec<u8>>;
 
 // ST7789 controller commands used by the Pirate Audio display.
 const ST7789_SWRESET: u8 = 0x01;
@@ -65,6 +81,10 @@ struct Args {
     #[arg(long, default_value = "/usr/bin/mba-network-mode")]
     network_script: String,
 
+    /// Base URL of the local mba-player daemon for playback status.
+    #[arg(long, default_value = "http://127.0.0.1:8090")]
+    player_url: String,
+
     /// BCM GPIO pins to treat as the fourth Pirate Audio button.
     #[arg(long = "fourth-button-gpio")]
     fourth_button_gpios: Vec<u8>,
@@ -72,6 +92,14 @@ struct Args {
     /// Disable display initialization and only monitor buttons.
     #[arg(long)]
     no_display: bool,
+
+    /// Unix socket path served for on-demand framebuffer snapshots.
+    #[arg(long, default_value = DEFAULT_SNAPSHOT_SOCKET)]
+    snapshot_socket: PathBuf,
+
+    /// Disable the framebuffer snapshot socket.
+    #[arg(long)]
+    no_snapshot_socket: bool,
 }
 
 fn main() -> Result<()> {
@@ -83,12 +111,7 @@ fn main() -> Result<()> {
     } else {
         args.fourth_button_gpios
     };
-    let button_specs = vec![
-        ButtonSpec::new("A", vec![BUTTON_A_PIN], ButtonAction::LogOnly),
-        ButtonSpec::new("B", vec![BUTTON_B_PIN], ButtonAction::LogOnly),
-        ButtonSpec::new("X", vec![BUTTON_X_PIN], ButtonAction::LogOnly),
-        ButtonSpec::new("Y", y_button_pins, ButtonAction::NetworkToggle),
-    ];
+    let button_specs = button_specs(y_button_pins);
     let button_summary = button_specs
         .iter()
         .map(|spec| format!("{}:{:?}", spec.name, spec.gpios))
@@ -116,10 +139,35 @@ fn main() -> Result<()> {
         }
     };
 
+    let snapshot_rx = if args.no_snapshot_socket {
+        None
+    } else {
+        match start_snapshot_server(&args.snapshot_socket) {
+            Ok(rx) => {
+                info!(socket = %args.snapshot_socket.display(), "snapshot socket listening");
+                Some(rx)
+            }
+            Err(error) => {
+                warn!(%error, "snapshot socket failed to start; screenshots disabled");
+                None
+            }
+        }
+    };
+
     let mut frame = Framebuffer::new(Rgb565::BLACK);
     let mut last_display = expired(DISPLAY_REFRESH);
-    let mut last_toggle = expired(BUTTON_COOLDOWN);
-    let mut message = String::from("Hold Y for network");
+    let mut last_network_toggle = expired(BUTTON_COOLDOWN);
+    let mut message = String::from("A play | B prev | X next | hold Y");
+    let player_client = match reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+    {
+        Ok(client) => Some(client),
+        Err(error) => {
+            warn!(%error, "failed to build player HTTP client; playback band will be empty");
+            None
+        }
+    };
 
     loop {
         if let Some(buttons) = buttons.as_mut() {
@@ -131,12 +179,14 @@ fn main() -> Result<()> {
                         last_display = expired(DISPLAY_REFRESH);
                     }
                     (ButtonAction::NetworkToggle, ButtonEventKind::LongPress) => {
-                        if last_toggle.elapsed() >= BUTTON_COOLDOWN {
+                        if last_network_toggle.elapsed() >= BUTTON_COOLDOWN {
                             message = String::from("Switching network...");
                             render_status(
                                 display.as_mut(),
                                 &mut frame,
                                 &args.network_script,
+                                player_client.as_ref(),
+                                &args.player_url,
                                 &message,
                             );
                             match run_network_toggle(&args.network_script) {
@@ -152,22 +202,97 @@ fn main() -> Result<()> {
                                     error!(%error, "network mode toggle failed");
                                 }
                             }
-                            last_toggle = Instant::now();
+                            last_network_toggle = Instant::now();
                             last_display = expired(DISPLAY_REFRESH);
                         }
                     }
-                    (ButtonAction::LogOnly, _) => {}
+                    (ButtonAction::Playback(command), _) => {
+                        message = String::from(command.progress_message());
+                        render_status(
+                            display.as_mut(),
+                            &mut frame,
+                            &args.network_script,
+                            player_client.as_ref(),
+                            &args.player_url,
+                            &message,
+                        );
+                        match run_playback_command(
+                            player_client.as_ref(),
+                            &args.player_url,
+                            command,
+                        ) {
+                            Ok(()) => {
+                                message = String::from(command.success_message());
+                                info!(command = command.endpoint(), "playback command sent");
+                            }
+                            Err(error) => {
+                                message = String::from("Playback command failed");
+                                error!(
+                                    %error,
+                                    command = command.endpoint(),
+                                    "playback command failed"
+                                );
+                            }
+                        }
+                        last_display = expired(DISPLAY_REFRESH);
+                    }
                 }
             }
         }
 
         if last_display.elapsed() >= DISPLAY_REFRESH {
-            render_status(display.as_mut(), &mut frame, &args.network_script, &message);
+            render_status(
+                display.as_mut(),
+                &mut frame,
+                &args.network_script,
+                player_client.as_ref(),
+                &args.player_url,
+                &message,
+            );
             last_display = Instant::now();
+        }
+
+        if let Some(rx) = snapshot_rx.as_ref() {
+            drain_snapshot_requests(rx, &frame);
         }
 
         thread::sleep(POLL_INTERVAL);
     }
+}
+
+fn drain_snapshot_requests(rx: &mpsc::Receiver<SnapshotReply>, frame: &Framebuffer) {
+    while let Ok(reply) = rx.try_recv() {
+        match encode_framebuffer_png(frame) {
+            Ok(bytes) => {
+                // try_send fails if the requester gave up waiting; that's fine.
+                let _ = reply.try_send(bytes);
+            }
+            Err(error) => {
+                warn!(%error, "failed to encode snapshot");
+            }
+        }
+    }
+}
+
+fn button_specs(y_button_pins: Vec<u8>) -> Vec<ButtonSpec> {
+    vec![
+        ButtonSpec::new(
+            "A",
+            vec![BUTTON_A_PIN],
+            ButtonAction::Playback(PlaybackCommand::Toggle),
+        ),
+        ButtonSpec::new(
+            "B",
+            vec![BUTTON_B_PIN],
+            ButtonAction::Playback(PlaybackCommand::Previous),
+        ),
+        ButtonSpec::new(
+            "X",
+            vec![BUTTON_X_PIN],
+            ButtonAction::Playback(PlaybackCommand::Next),
+        ),
+        ButtonSpec::new("Y", y_button_pins, ButtonAction::NetworkToggle),
+    ]
 }
 
 // Returns an Instant far enough in the past that elapsed() is at least `duration`,
@@ -191,6 +316,8 @@ fn render_status(
     display: Option<&mut PirateDisplay>,
     frame: &mut Framebuffer,
     network_script: &str,
+    player_client: Option<&reqwest::blocking::Client>,
+    player_url: &str,
     message: &str,
 ) {
     let Some(display) = display else {
@@ -211,71 +338,183 @@ fn render_status(
         }
     };
 
-    draw_dashboard(frame, &status, message);
+    let playback = player_client.and_then(|client| match playback_status(client, player_url) {
+        Ok(playback) => playback,
+        Err(error) => {
+            warn!(%error, "failed to read playback status");
+            None
+        }
+    });
+
+    draw_dashboard(frame, &status, playback.as_ref(), message);
 
     if let Err(error) = display.flush(frame) {
         warn!(%error, "display refresh failed");
     }
 }
 
-fn draw_dashboard(frame: &mut Framebuffer, status: &NetworkStatus, message: &str) {
-    let title = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
-    let label = MonoTextStyle::new(&FONT_6X10, Rgb565::new(16, 38, 22));
-    let body = MonoTextStyle::new(&FONT_10X20, Rgb565::CYAN);
-    let muted = MonoTextStyle::new(&FONT_6X10, Rgb565::new(18, 30, 18));
-    let accent = match status.mode {
+fn draw_dashboard(
+    frame: &mut Framebuffer,
+    status: &NetworkStatus,
+    playback: Option<&PlaybackInfo>,
+    message: &str,
+) {
+    let title_style = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
+    let mode_color = match status.mode {
         NetworkMode::Car => Rgb565::YELLOW,
         _ => Rgb565::GREEN,
     };
+    let mode_style = MonoTextStyle::new(&FONT_8X13_BOLD, mode_color);
+    let body_style = MonoTextStyle::new(&FONT_8X13, Rgb565::CYAN);
+    let secondary_style = MonoTextStyle::new(&FONT_6X10, Rgb565::new(18, 38, 22));
+    let now_playing_style = MonoTextStyle::new(&FONT_8X13, Rgb565::WHITE);
+    let footer_style = MonoTextStyle::new(&FONT_6X10, Rgb565::new(20, 38, 24));
+    let divider_color = Rgb565::new(4, 10, 8);
 
+    // Background.
     let _ = Rectangle::new(Point::new(0, 0), Size::new(DISPLAY_WIDTH, DISPLAY_HEIGHT))
         .into_styled(PrimitiveStyle::with_fill(Rgb565::BLACK))
         .draw(frame);
-    let _ = Rectangle::new(Point::new(0, 0), Size::new(DISPLAY_WIDTH, 30))
+
+    // Title bar.
+    let _ = Rectangle::new(Point::new(0, 0), Size::new(DISPLAY_WIDTH, 28))
         .into_styled(PrimitiveStyle::with_fill(Rgb565::new(0, 16, 18)))
         .draw(frame);
-    let _ = Text::new("Matchbox Audio", Point::new(8, 22), title).draw(frame);
+    let _ = Text::new("Matchbox Audio", Point::new(8, 20), title_style).draw(frame);
 
-    let mode = status.mode.as_str().to_uppercase();
-    let _ = Text::new("network", Point::new(8, 48), label).draw(frame);
+    draw_divider(frame, 30, divider_color);
+
+    // Network band (rows at y=46 and y=68; band ends at ~78).
+    let mode_label = status.mode.as_str().to_uppercase();
+    let connection_text = match status.mode {
+        NetworkMode::Car => format!("{mode_label} · {}", status.hotspot_ssid),
+        _ => format!("{mode_label} · {}", status.active_connection),
+    };
     let _ = Text::new(
-        &mode,
-        Point::new(8, 72),
-        MonoTextStyle::new(&FONT_10X20, accent),
+        truncate_chars(&connection_text, 28),
+        Point::new(8, 46),
+        mode_style,
     )
     .draw(frame);
 
-    let _ = Text::new("connection", Point::new(8, 96), label).draw(frame);
+    let detail_text = match status.mode {
+        NetworkMode::Car => format!("pass {}", status.hotspot_password),
+        _ => status.ip4.clone(),
+    };
     let _ = Text::new(
-        truncate(&status.active_connection, 20),
-        Point::new(8, 120),
-        body,
+        truncate_chars(&detail_text, 36),
+        Point::new(8, 66),
+        secondary_style,
     )
     .draw(frame);
 
-    let _ = Text::new("address", Point::new(8, 144), label).draw(frame);
-    let _ = Text::new(truncate(&status.ip4, 20), Point::new(8, 168), body).draw(frame);
+    draw_divider(frame, 80, divider_color);
 
-    if status.mode == NetworkMode::Car {
-        let _ = Text::new("hotspot", Point::new(8, 192), label).draw(frame);
-        let _ = Text::new(
-            truncate(&status.hotspot_ssid, 20),
-            Point::new(8, 214),
-            muted,
-        )
+    // Now-playing band (rows at y=98, y=120, y=160; band ends at ~178).
+    match playback {
+        Some(info) => {
+            let glyph = match info.state {
+                PlaybackState::Play => ">",
+                PlaybackState::Pause => "||",
+                PlaybackState::Stop => "[]",
+            };
+            let title_line = format_track_title(glyph, info.track.as_ref());
+            let _ = Text::new(
+                truncate_chars(&title_line, 28),
+                Point::new(8, 100),
+                now_playing_style,
+            )
+            .draw(frame);
+
+            let meta = format_track_meta(info.track.as_ref());
+            let _ = Text::new(
+                truncate_chars(&meta, 36),
+                Point::new(8, 120),
+                secondary_style,
+            )
+            .draw(frame);
+
+            let times = format_track_times(info.track.as_ref());
+            let _ = Text::new(&times, Point::new(8, 160), body_style).draw(frame);
+            let volume_text = format!("vol {:>3}", info.volume);
+            let volume_x = (DISPLAY_WIDTH as i32) - 8 - (volume_text.len() as i32) * 8;
+            let _ = Text::new(&volume_text, Point::new(volume_x, 160), body_style).draw(frame);
+        }
+        None => {
+            let _ = Text::new("idle", Point::new(8, 100), now_playing_style).draw(frame);
+            let _ = Text::new("MPD unavailable", Point::new(8, 120), secondary_style).draw(frame);
+        }
+    }
+
+    draw_divider(frame, 184, divider_color);
+
+    // Footer hint.
+    let _ = Text::new(
+        truncate_chars(message, 36),
+        Point::new(8, 210),
+        footer_style,
+    )
+    .draw(frame);
+}
+
+fn draw_divider(frame: &mut Framebuffer, y: i32, color: Rgb565) {
+    let _ = Rectangle::new(Point::new(0, y), Size::new(DISPLAY_WIDTH, 1))
+        .into_styled(PrimitiveStyle::with_fill(color))
         .draw(frame);
-        let pass = format!("pass {}", status.hotspot_password);
-        let _ = Text::new(truncate(&pass, 28), Point::new(8, 230), muted).draw(frame);
-    } else {
-        let _ = Text::new(truncate(message, 28), Point::new(8, 218), muted).draw(frame);
+}
+
+fn format_track_title(glyph: &str, track: Option<&TrackInfo>) -> String {
+    match track {
+        Some(track) => {
+            let title = track.title.as_deref().unwrap_or_else(|| {
+                track
+                    .uri
+                    .rsplit('/')
+                    .next()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(&track.uri)
+            });
+            format!("{glyph} {title}")
+        }
+        None => format!("{glyph} (no track)"),
     }
 }
 
-fn truncate(value: &str, max_chars: usize) -> &str {
+fn format_track_meta(track: Option<&TrackInfo>) -> String {
+    let track = match track {
+        Some(t) => t,
+        None => return String::new(),
+    };
+    let artist = track.artist.as_deref().unwrap_or("");
+    let album = track.album.as_deref().unwrap_or("");
+    match (artist.is_empty(), album.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => artist.to_string(),
+        (true, false) => album.to_string(),
+        (false, false) => format!("{artist} — {album}"),
+    }
+}
+
+fn format_track_times(track: Option<&TrackInfo>) -> String {
+    let track = match track {
+        Some(t) => t,
+        None => return String::from("00:00 / 00:00"),
+    };
+    let elapsed = track.elapsed_s.unwrap_or(0);
+    let duration = track.duration_s.unwrap_or(0);
+    format!("{} / {}", format_seconds(elapsed), format_seconds(duration))
+}
+
+fn format_seconds(seconds: u32) -> String {
+    let minutes = seconds / 60;
+    let remainder = seconds % 60;
+    format!("{minutes:02}:{remainder:02}")
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> &str {
     if value.chars().count() <= max_chars {
         return value;
     }
-
     let mut end = value.len();
     for (count, (index, _)) in value.char_indices().enumerate() {
         if count == max_chars {
@@ -284,6 +523,23 @@ fn truncate(value: &str, max_chars: usize) -> &str {
         }
     }
     &value[..end]
+}
+
+fn playback_status(
+    client: &reqwest::blocking::Client,
+    base_url: &str,
+) -> Result<Option<PlaybackInfo>> {
+    let url = format!("{}/api/v1/status", base_url.trim_end_matches('/'));
+    let response = client
+        .get(&url)
+        .send()
+        .with_context(|| format!("failed to GET {url}"))?
+        .error_for_status()
+        .with_context(|| format!("non-success from {url}"))?;
+    let payload: StatusResponse = response
+        .json()
+        .with_context(|| format!("failed to parse status JSON from {url}"))?;
+    Ok(payload.playback)
 }
 
 #[derive(Debug)]
@@ -317,6 +573,38 @@ fn run_network_toggle(network_script: &str) -> Result<String> {
     run_network_command(network_script, "toggle")
 }
 
+fn run_playback_command(
+    client: Option<&reqwest::blocking::Client>,
+    base_url: &str,
+    command: PlaybackCommand,
+) -> Result<()> {
+    let client = client.context("player HTTP client unavailable")?;
+    let url = playback_command_url(base_url, command);
+    let response = client
+        .post(&url)
+        .send()
+        .with_context(|| format!("failed to POST {url}"))?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
+    }
+
+    let body = response.text().unwrap_or_default();
+    bail!(
+        "playback {} failed ({status}): {}",
+        command.endpoint(),
+        body.trim()
+    );
+}
+
+fn playback_command_url(base_url: &str, command: PlaybackCommand) -> String {
+    format!(
+        "{}/api/v1/playback/{}",
+        base_url.trim_end_matches('/'),
+        command.endpoint()
+    )
+}
+
 fn run_network_command(network_script: &str, command: &str) -> Result<String> {
     let output = Command::new(network_script)
         .arg(command)
@@ -342,8 +630,41 @@ fn parse_field<'a>(output: &'a str, field: &str) -> Option<&'a str> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ButtonAction {
-    LogOnly,
     NetworkToggle,
+    Playback(PlaybackCommand),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlaybackCommand {
+    Toggle,
+    Previous,
+    Next,
+}
+
+impl PlaybackCommand {
+    fn endpoint(self) -> &'static str {
+        match self {
+            Self::Toggle => "toggle",
+            Self::Previous => "previous",
+            Self::Next => "next",
+        }
+    }
+
+    fn progress_message(self) -> &'static str {
+        match self {
+            Self::Toggle => "Play/pause...",
+            Self::Previous => "Previous track...",
+            Self::Next => "Next track...",
+        }
+    }
+
+    fn success_message(self) -> &'static str {
+        match self {
+            Self::Toggle => "Playback toggled",
+            Self::Previous => "Previous track",
+            Self::Next => "Next track",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -649,5 +970,149 @@ impl DrawTarget for Framebuffer {
     fn clear(&mut self, color: Self::Color) -> Result<(), Self::Error> {
         self.pixels.fill(color);
         Ok(())
+    }
+}
+
+fn start_snapshot_server(socket_path: &Path) -> Result<mpsc::Receiver<SnapshotReply>> {
+    if let Some(parent) = socket_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create snapshot socket dir {}", parent.display())
+            })?;
+        }
+    }
+    if socket_path.exists() {
+        std::fs::remove_file(socket_path).ok();
+    }
+
+    let listener = UnixListener::bind(socket_path)
+        .with_context(|| format!("failed to bind snapshot socket {}", socket_path.display()))?;
+    // Allow non-root users (CLI over ssh as the matchbox user) to connect.
+    std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o666))
+        .with_context(|| format!("failed to chmod snapshot socket {}", socket_path.display()))?;
+
+    let (tx, rx) = mpsc::channel::<SnapshotReply>();
+    let socket_label = socket_path.to_path_buf();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            match stream {
+                Ok(stream) => {
+                    let tx = tx.clone();
+                    thread::spawn(move || {
+                        if let Err(error) = handle_snapshot_request(stream, tx) {
+                            warn!(%error, "snapshot request handler failed");
+                        }
+                    });
+                }
+                Err(error) => {
+                    warn!(%error, "snapshot socket accept failed");
+                }
+            }
+        }
+        info!(socket = %socket_label.display(), "snapshot accept loop exited");
+    });
+    Ok(rx)
+}
+
+fn handle_snapshot_request(
+    mut stream: UnixStream,
+    snapshot_tx: mpsc::Sender<SnapshotReply>,
+) -> Result<()> {
+    let (reply_tx, reply_rx) = mpsc::sync_channel::<Vec<u8>>(1);
+    snapshot_tx
+        .send(reply_tx)
+        .map_err(|_| anyhow!("snapshot request channel closed"))?;
+    let bytes = reply_rx
+        .recv_timeout(SNAPSHOT_REPLY_TIMEOUT)
+        .context("snapshot request timed out")?;
+    stream
+        .write_all(&bytes)
+        .context("failed to write snapshot to client")?;
+    Ok(())
+}
+
+fn encode_framebuffer_png(frame: &Framebuffer) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut buf, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder
+            .write_header()
+            .context("failed to write PNG header")?;
+        let mut rgb = Vec::with_capacity((DISPLAY_WIDTH * DISPLAY_HEIGHT * 3) as usize);
+        for pixel in &frame.pixels {
+            let raw = RawU16::from(*pixel).into_inner();
+            let r5 = ((raw >> 11) & 0x1F) as u8;
+            let g6 = ((raw >> 5) & 0x3F) as u8;
+            let b5 = (raw & 0x1F) as u8;
+            // Replicate the high bits so 5/6-bit channels span the full 8-bit range.
+            rgb.push((r5 << 3) | (r5 >> 2));
+            rgb.push((g6 << 2) | (g6 >> 4));
+            rgb.push((b5 << 3) | (b5 >> 2));
+        }
+        writer
+            .write_image_data(&rgb)
+            .context("failed to write PNG pixels")?;
+    }
+    Ok(buf)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pirate_audio_buttons_map_to_transport_controls() {
+        let specs = button_specs(vec![24]);
+
+        assert_eq!(specs[0].name, "A");
+        assert_eq!(specs[0].gpios, vec![BUTTON_A_PIN]);
+        assert_eq!(
+            specs[0].action,
+            ButtonAction::Playback(PlaybackCommand::Toggle)
+        );
+        assert_eq!(specs[1].name, "B");
+        assert_eq!(specs[1].gpios, vec![BUTTON_B_PIN]);
+        assert_eq!(
+            specs[1].action,
+            ButtonAction::Playback(PlaybackCommand::Previous)
+        );
+        assert_eq!(specs[2].name, "X");
+        assert_eq!(specs[2].gpios, vec![BUTTON_X_PIN]);
+        assert_eq!(
+            specs[2].action,
+            ButtonAction::Playback(PlaybackCommand::Next)
+        );
+        assert_eq!(specs[3].name, "Y");
+        assert_eq!(specs[3].action, ButtonAction::NetworkToggle);
+    }
+
+    #[test]
+    fn playback_command_urls_trim_base_slash() {
+        assert_eq!(
+            playback_command_url("http://127.0.0.1:8090/", PlaybackCommand::Toggle),
+            "http://127.0.0.1:8090/api/v1/playback/toggle"
+        );
+        assert_eq!(
+            playback_command_url("http://127.0.0.1:8090/", PlaybackCommand::Previous),
+            "http://127.0.0.1:8090/api/v1/playback/previous"
+        );
+        assert_eq!(
+            playback_command_url("http://127.0.0.1:8090/", PlaybackCommand::Next),
+            "http://127.0.0.1:8090/api/v1/playback/next"
+        );
+    }
+
+    #[test]
+    fn encode_framebuffer_png_emits_valid_png() {
+        let frame = Framebuffer::new(Rgb565::new(31, 0, 0));
+        let bytes = encode_framebuffer_png(&frame).expect("encode succeeds");
+        assert!(
+            bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]),
+            "expected PNG signature, got {:02x?}",
+            &bytes[..bytes.len().min(8)]
+        );
+        assert!(bytes.len() > 50, "PNG payload looked too small");
     }
 }

@@ -9,6 +9,7 @@ APP_STATE_DIR="$APP_DIR/state"
 NETWORK_DIR="$APP_DIR/network"
 UPDATE_DIR="$APP_DIR/update"
 MPD_DIR=/data/mpd
+MPD_PLAYLISTS_DIR="$MPD_DIR/playlists"
 
 require_user() {
     if ! id "$1" >/dev/null 2>&1; then
@@ -37,15 +38,19 @@ ensure_dir() {
 
 require_user matchbox
 require_user mba-player
+require_user mpd
 require_group matchbox
 require_group matchbox-audio
+require_group audio
+require_group mpd
 
 ensure_dir "$APP_DIR" root root 0711
 ensure_dir "$APP_STATE_DIR" mba-player matchbox-audio 0750
 ensure_dir "$NETWORK_DIR" root matchbox-audio 0750
 ensure_dir "$UPDATE_DIR" matchbox matchbox 0750
 ensure_dir "$MUSIC_DIR" matchbox matchbox 0755
-ensure_dir "$MPD_DIR" root matchbox-audio 0750
+ensure_dir "$MPD_DIR" mpd mpd 0750
+ensure_dir "$MPD_PLAYLISTS_DIR" mpd mpd 0750
 
 if [ -f "$NETWORK_DIR/hotspot.env" ]; then
     chown root:root "$NETWORK_DIR/hotspot.env"

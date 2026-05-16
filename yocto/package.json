@@ -8,6 +8,7 @@
     "build": "node scripts/build.mjs",
     "flash": "node scripts/flash.mjs",
     "hardening": "node scripts/remote-hardening-test.mjs",
+    "music-sync": "node scripts/music-sync.mjs",
     "smoke": "node scripts/remote-smoke-test.mjs",
     "update": "node scripts/update.mjs"
   }

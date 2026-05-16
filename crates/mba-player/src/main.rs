@@ -1,5 +1,6 @@
 mod config;
 mod http;
+mod mpd;
 
 use std::{net::SocketAddr, path::PathBuf};
 
@@ -22,6 +23,10 @@ struct Args {
     #[arg(long)]
     bind: Option<SocketAddr>,
 
+    /// Address of the MPD server.
+    #[arg(long)]
+    mpd_addr: Option<SocketAddr>,
+
     /// Path to the network-mode helper script.
     #[arg(long, default_value = "/usr/bin/mba-network-mode")]
     network_script: PathBuf,
@@ -36,14 +41,20 @@ async fn main() -> Result<()> {
     if let Some(bind) = args.bind {
         config.bind = bind;
     }
+    if let Some(mpd_addr) = args.mpd_addr {
+        config.mpd_addr = mpd_addr;
+    }
 
     let status = StatusResponse::ready(
         env!("CARGO_PKG_VERSION"),
         option_env!("MATCHBOX_AUDIO_GIT_SHA"),
     );
+    let (mpd, _mpd_task) = mpd::start(config.mpd_addr);
+    info!(addr = %config.mpd_addr, "MPD client task started");
     let app = http::router(AppState {
         status,
         network_script: args.network_script,
+        mpd,
     });
     let listener = TcpListener::bind(config.bind)
         .await

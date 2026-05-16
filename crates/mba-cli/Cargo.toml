@@ -10,5 +10,6 @@ anyhow.workspace = true
 clap.workspace = true
 mba-protocol = { path = "../mba-protocol" }
 reqwest.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
 

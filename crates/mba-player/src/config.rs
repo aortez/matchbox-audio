@@ -11,12 +11,14 @@ use serde::Deserialize;
 #[serde(default, deny_unknown_fields)]
 pub struct PlayerConfig {
     pub bind: SocketAddr,
+    pub mpd_addr: SocketAddr,
 }
 
 impl Default for PlayerConfig {
     fn default() -> Self {
         Self {
             bind: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 8090),
+            mpd_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6600),
         }
     }
 }

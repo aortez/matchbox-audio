@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Matchbox Audio</title>
+  <link rel="stylesheet" href="/app.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <h1>Matchbox Audio</h1>
+        <p id="networkLine" class="subtle">Network unavailable</p>
+      </div>
+      <div id="serviceState" class="status-pill">ready</div>
+    </header>
+
+    <section class="now-playing" aria-label="Now playing">
+      <div class="track-block">
+        <p id="playbackState" class="eyebrow">stopped</p>
+        <h2 id="trackTitle">No track</h2>
+        <p id="trackMeta" class="subtle">Queue is empty</p>
+      </div>
+      <div class="time-volume">
+        <span id="trackTime">0:00 / 0:00</span>
+        <label class="volume-control">
+          <span>Volume</span>
+          <input id="volumeInput" type="range" min="0" max="100" value="60">
+          <output id="volumeValue">60</output>
+        </label>
+      </div>
+    </section>
+
+    <nav class="tabs" aria-label="Views">
+      <button class="tab active" type="button" data-tab="library">Library</button>
+      <button class="tab" type="button" data-tab="queue">Queue</button>
+      <button class="tab" type="button" data-tab="now">Now Playing</button>
+    </nav>
+
+    <section id="libraryView" class="view active" aria-label="Library">
+      <div class="view-header">
+        <div>
+          <p class="eyebrow">Library</p>
+          <h2 id="libraryPath">Root</h2>
+        </div>
+        <div class="view-actions">
+          <button id="upButton" class="secondary" type="button">Up</button>
+          <button id="rescanButton" class="secondary" type="button">Rescan</button>
+        </div>
+      </div>
+      <div id="libraryList" class="list"></div>
+    </section>
+
+    <section id="queueView" class="view" aria-label="Queue">
+      <div class="view-header">
+        <div>
+          <p class="eyebrow">Queue</p>
+          <h2 id="queueCount">0 items</h2>
+        </div>
+        <button id="clearQueueButton" class="secondary danger" type="button">Clear</button>
+      </div>
+      <div id="queueList" class="list"></div>
+    </section>
+
+    <section id="nowView" class="view" aria-label="Now playing details">
+      <div class="view-header">
+        <div>
+          <p class="eyebrow">Now Playing</p>
+          <h2 id="detailTitle">No track</h2>
+        </div>
+      </div>
+      <dl class="detail-grid">
+        <div>
+          <dt>Artist</dt>
+          <dd id="detailArtist">-</dd>
+        </div>
+        <div>
+          <dt>Album</dt>
+          <dd id="detailAlbum">-</dd>
+        </div>
+        <div>
+          <dt>Path</dt>
+          <dd id="detailPath">-</dd>
+        </div>
+      </dl>
+    </section>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </main>
+
+  <footer class="transport" aria-label="Playback controls">
+    <button id="previousButton" class="transport-button" type="button" aria-label="Previous track">Prev</button>
+    <button id="toggleButton" class="transport-button primary" type="button" aria-label="Play or pause">Play</button>
+    <button id="nextButton" class="transport-button" type="button" aria-label="Next track">Next</button>
+    <button id="stopButton" class="transport-button" type="button" aria-label="Stop playback">Stop</button>
+  </footer>
+</body>
+</html>

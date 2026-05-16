@@ -10,7 +10,7 @@ HOSTNAME_DEFAULT = "matchbox-audio"
 EXTRA_USERS_PARAMS = " \
     groupadd -g 1000 matchbox; \
     groupadd -r matchbox-audio; \
-    useradd -m -u 1000 -g matchbox -G systemd-journal -s /bin/sh matchbox; \
+    useradd -m -u 1000 -g matchbox -G audio,systemd-journal -s /bin/sh matchbox; \
     usermod -p '*' matchbox; \
     useradd -r -g matchbox-audio -d /nonexistent -s /bin/false mba-player; \
 "
@@ -51,11 +51,20 @@ ROOTFS_POSTPROCESS_COMMAND:append = " setup_matchbox_network_policy;"
 # Pi Zero 2 W Wi-Fi firmware and NetworkManager Wi-Fi support for the initial
 # home-network remote development loop.
 IMAGE_INSTALL:append = " \
+    alsa-utils-aplay \
     linux-firmware-rpidistro-bcm43436 \
     networkmanager-wifi \
     openssh-sftp-server \
     kbd \
     rsync \
+"
+
+# MPD plus the mpc CLI for on-device sanity checks. The Matchbox bbappend
+# overrides mpd.conf and the systemd unit; see
+# recipes-multimedia/musicpd/mpd_%.bbappend.
+IMAGE_INSTALL:append = " \
+    mpc \
+    mpd \
 "
 
 # BLE provisioning is deferred. Keep BlueZ from pi-base, but avoid pulling in

@@ -23,6 +23,7 @@ repos:
     url: "https://git.openembedded.org/meta-openembedded"
     branch: scarthgap
     layers:
+      meta-multimedia:
       meta-networking:
       meta-oe:
       meta-python:

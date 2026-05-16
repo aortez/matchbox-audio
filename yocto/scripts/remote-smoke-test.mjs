@@ -83,7 +83,16 @@ function main() {
 
   check('SSH reachability', () => ssh(remoteTarget, 'echo reachable'));
   check('mba-player service', () => ssh(remoteTarget, 'systemctl is-active mba-player.service'));
+  check('mpd service', () => ssh(remoteTarget, 'systemctl is-active mpd.service'));
+  check('mpd startup volume service', () => ssh(remoteTarget, 'systemctl is-active mba-mpd-startup-volume.service'));
   check('mba-cli status', () => ssh(remoteTarget, 'mba-cli status'));
+  check('mba-cli status reports playback', () => ssh(remoteTarget, "mba-cli status | grep -E '^playback_(state|volume):'"));
+  check('mba-cli volume sets MPD volume', () => ssh(remoteTarget, "mba-cli volume 80 && mpc status | grep -q 'volume:.*80%'"));
+  check('mba-cli rescan triggers MPD update', () => ssh(remoteTarget, "mba-cli rescan | grep -q '^scan started:'"));
+  check('mba-cli library lists root', () => ssh(remoteTarget, "mba-cli library | grep -E '^path:'"));
+  check('mba-cli screenshot writes a PNG', () => ssh(remoteTarget, "rm -f /tmp/mba-shot.png && mba-cli screenshot --output /tmp/mba-shot.png && find /tmp/mba-shot.png -size +100c | grep -q . && file /tmp/mba-shot.png | grep -q 'PNG image'"));
+  check('PIM483 ALSA card', () => ssh(remoteTarget, "aplay -l && grep -qi hifiberry /proc/asound/cards && echo hifiberry-dac"));
+  check('MPD ALSA output', () => ssh(remoteTarget, "mpc outputs | grep 'matchbox-pim483-lineout'"));
   check('/data mount', () => ssh(remoteTarget, "grep ' /data ' /proc/mounts"));
   check('A/B slot status', () => ssh(remoteTarget, 'ab-boot-manager status'));
 

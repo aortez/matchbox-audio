@@ -1,0 +1,56 @@
+#!/bin/sh
+# Clamp MPD's software volume at boot before user playback starts.
+
+set -eu
+
+MPD_HOST="${MPD_HOST:-127.0.0.1}"
+MPD_PORT="${MPD_PORT:-6600}"
+STARTUP_VOLUME="${MBA_MPD_STARTUP_VOLUME:-60}"
+WAIT_SECONDS="${MBA_MPD_WAIT_SECONDS:-10}"
+
+case "$STARTUP_VOLUME" in
+    ''|*[!0-9]*)
+        echo "error: MBA_MPD_STARTUP_VOLUME must be an integer" >&2
+        exit 1
+        ;;
+esac
+
+case "$WAIT_SECONDS" in
+    ''|*[!0-9]*)
+        echo "error: MBA_MPD_WAIT_SECONDS must be an integer" >&2
+        exit 1
+        ;;
+esac
+
+if [ "$STARTUP_VOLUME" -gt 100 ]; then
+    echo "error: MBA_MPD_STARTUP_VOLUME must be 100 or lower" >&2
+    exit 1
+fi
+
+attempt=0
+while [ "$attempt" -lt "$WAIT_SECONDS" ]; do
+    if mpc --host="$MPD_HOST" --port="$MPD_PORT" status >/tmp/mba-mpd-status 2>/tmp/mba-mpd-status.err; then
+        break
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+done
+
+if [ ! -s /tmp/mba-mpd-status ]; then
+    echo "error: MPD did not become reachable before startup volume clamp" >&2
+    cat /tmp/mba-mpd-status.err >&2 || true
+    rm -f /tmp/mba-mpd-status /tmp/mba-mpd-status.err
+    exit 1
+fi
+
+current_volume=$(
+    sed -n 's/.*volume:[[:space:]]*\([0-9][0-9]*\)%.*/\1/p' /tmp/mba-mpd-status |
+        head -n 1
+)
+rm -f /tmp/mba-mpd-status /tmp/mba-mpd-status.err
+
+if [ -z "$current_volume" ] || [ "$current_volume" -gt "$STARTUP_VOLUME" ]; then
+    exec mpc --host="$MPD_HOST" --port="$MPD_PORT" volume "$STARTUP_VOLUME"
+fi
+
+echo "MPD startup volume already at ${current_volume}%"

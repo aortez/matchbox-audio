@@ -10,6 +10,7 @@ anyhow.workspace = true
 axum.workspace = true
 clap.workspace = true
 mba-protocol = { path = "../mba-protocol" }
+mpd_client.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

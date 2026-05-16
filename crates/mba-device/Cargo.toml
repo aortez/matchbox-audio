@@ -10,6 +10,9 @@ anyhow.workspace = true
 clap.workspace = true
 embedded-graphics.workspace = true
 mba-protocol = { path = "../mba-protocol" }
+png = "0.17"
+reqwest = { workspace = true, features = ["blocking"] }
 rppal.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

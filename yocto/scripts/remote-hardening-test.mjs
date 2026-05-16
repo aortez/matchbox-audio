@@ -114,6 +114,8 @@ function main() {
   expectOk(remoteTarget, 'SSH reachability', 'echo reachable');
   expectOk(remoteTarget, 'mba-player service active', 'systemctl is-active mba-player.service');
   expectOk(remoteTarget, 'mba-device service active', 'systemctl is-active mba-device.service');
+  expectOk(remoteTarget, 'mpd service active', 'systemctl is-active mpd.service');
+  expectOk(remoteTarget, 'mpd startup volume service active', 'systemctl is-active mba-mpd-startup-volume.service');
   expectOk(remoteTarget, 'network restore service active', 'systemctl is-active mba-network-mode-restore.service');
   expectOk(remoteTarget, 'mba-cli status', 'mba-cli status');
 
@@ -140,12 +142,31 @@ function main() {
   expectRemoteValue(remoteTarget, 'mba-player service group', 'systemctl show -p Group --value mba-player.service', 'matchbox-audio');
   expectRemoteValue(remoteTarget, 'mba-player no-new-privileges', 'systemctl show -p NoNewPrivileges --value mba-player.service', 'yes');
 
+  expectRemoteValue(remoteTarget, 'mpd no-new-privileges', 'systemctl show -p NoNewPrivileges --value mpd.service', 'yes');
+  expectRemoteValue(remoteTarget, 'mpd protect system', 'systemctl show -p ProtectSystem --value mpd.service', 'strict');
+  expectRemoteValue(remoteTarget, 'mpd startup volume service user', 'systemctl show -p User --value mba-mpd-startup-volume.service', 'mpd');
+  expectRemoteValue(remoteTarget, 'mpd startup volume service group', 'systemctl show -p Group --value mba-mpd-startup-volume.service', 'audio');
+  expectRemoteValue(remoteTarget, 'mpd startup volume no-new-privileges', 'systemctl show -p NoNewPrivileges --value mba-mpd-startup-volume.service', 'yes');
+  expectRemoteValue(
+    remoteTarget,
+    'mpd binds 127.0.0.1:6600 only',
+    "netstat -lnt | awk '$4 ~ /:6600$/ {print $4}' | sort -u | tr '\\n' ' ' | sed 's/ $//'",
+    '127.0.0.1:6600',
+  );
+  expectOk(remoteTarget, 'mpc status reaches mpd', 'mpc status >/dev/null');
+  expectOk(remoteTarget, 'aplay is installed', 'command -v aplay >/dev/null');
+  expectOk(remoteTarget, 'PIM483 boot overlay is configured', "grep -Fxq 'dtoverlay=hifiberry-dac' /boot/config.txt && grep -Fxq 'dtparam=audio=off' /boot/config.txt");
+  expectOk(remoteTarget, 'PIM483 ALSA card is visible', "grep -qi hifiberry /proc/asound/cards && aplay -l | grep -qi hifiberry");
+  expectOk(remoteTarget, 'ALSA default targets Matchbox I2S card', "grep -q 'pcm.matchbox_i2s_hw' /etc/asound.conf");
+  expectOk(remoteTarget, 'MPD ALSA output is configured', "mpc outputs | grep -q 'matchbox-pim483-lineout'");
+
   expectOk(remoteTarget, 'sudo allowlist is visible', 'sudo -n -l');
   expectFail(remoteTarget, 'plain sudo is denied', 'sudo -n true');
   expectFail(remoteTarget, 'shell sudo is denied', "sudo -n sh -c 'id'");
   expectFail(remoteTarget, 'shadow read is denied', 'sudo -n cat /etc/shadow');
   expectFail(remoteTarget, 'sudo journalctl is denied', 'sudo -n journalctl -n 1');
   expectOk(remoteTarget, 'journal is readable without sudo', 'id -nG | grep -qw systemd-journal && journalctl --no-pager -n 1 >/dev/null');
+  expectOk(remoteTarget, 'ALSA diagnostics are readable by matchbox', 'id -nG | grep -qw audio && aplay -l >/dev/null');
   expectOk(remoteTarget, 'boot config helper is allowed', 'sudo -n /usr/bin/mba-boot-config ensure-pirate-audio');
   expectOk(remoteTarget, 'mba-ab-update wrapper is allowed', 'sudo -n -l /usr/bin/mba-ab-update >/dev/null');
   expectFail(remoteTarget, 'direct ab-update-with-key is denied', 'sudo -n -l /usr/sbin/ab-update-with-key /data/matchbox-audio/update/probe /data/matchbox-audio/update/key.pub matchbox >/dev/null 2>&1');
@@ -183,6 +204,10 @@ function main() {
   expectRemoteValue(remoteTarget, 'network data directory mode', 'stat -c %U:%G:%a /data/matchbox-audio/network', 'root:matchbox-audio:750');
   expectRemoteValue(remoteTarget, 'update directory mode', 'stat -c %U:%G:%a /data/matchbox-audio/update', 'matchbox:matchbox:750');
   expectRemoteValue(remoteTarget, 'music directory mode', 'stat -c %U:%G:%a /data/music', 'matchbox:matchbox:755');
+  expectRemoteValue(remoteTarget, 'mpd directory mode', 'stat -c %U:%G:%a /data/mpd', 'mpd:mpd:750');
+  // The 0750 mode on /data/mpd intentionally hides everything inside from
+  // the matchbox user, so subdirectory ownership cannot be verified from this
+  // SSH session. The live mpc status check below proves MPD owns the tree.
   expectFail(remoteTarget, 'hotspot secret is not readable by matchbox', 'test -r /data/matchbox-audio/network/hotspot.env');
   expectOk(
     remoteTarget,

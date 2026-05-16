@@ -10,6 +10,10 @@
 # Local environment and device configuration.
 .env
 config/hotspot.local.json
+config/sync.local.json
+
+# Captured device screenshots from screenshot.sh.
+/screenshot.png
 
 # Yocto local build state and flash-time secrets.
 /build/
