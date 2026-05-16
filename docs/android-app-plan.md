@@ -10,17 +10,22 @@ are still required before calling the feature usable.
 
 ## Current Decisions
 
-- Android uses Bluetooth Classic RFCOMM as the primary transport.
+- Android uses BLE GATT as the primary control transport.
 - `mba-bt` is a separate bridge daemon; `mba-player` remains the owner of
   playback, library, queue, and product state.
 - `mba-bt` v1 allows one active app connection.
 - A second active app connection receives a structured `busy` response.
-- BLE is optional and deferred unless Classic discovery/pairing is poor.
+- RFCOMM is a fallback transport only if BLE reliability or throughput is poor
+  on the target phone.
 - Pairing mode starts as a CLI-triggered flow before hardware-button UX.
 - Android v1 does not include artwork.
 - Android v1 does not include search.
+- Android v1 does not include bulk library sync, music transfer, or large
+  diagnostics over Bluetooth.
 - The web app remains available for fallback, diagnostics, and admin workflows.
-- Private Android deployment starts with local debug installs, then signed APKs.
+- Private Android deployment starts with local debug installs, then manually
+  distributed signed APKs. Play Store and Firebase-style distribution are
+  deferred until there are multiple testers.
 
 ## Workstreams
 
@@ -30,7 +35,9 @@ Owns the stable client/device language shared by Rust, Android, and eventually
 the web app.
 
 - Request, response, event, and error envelopes.
-- Frame encoding and parsing.
+- Transport-neutral message encoding and parsing.
+- BLE chunking, reassembly, and max message size.
+- Paged result contracts for library and queue responses.
 - Protocol version negotiation.
 - Capability reporting.
 - JSON fixtures shared by Rust and Android tests.
@@ -41,10 +48,10 @@ the web app.
 Owns Bluetooth exposure and translation into existing Matchbox behavior.
 
 - New `mba-bt` Rust crate.
-- Transport abstraction for in-memory, TCP/dev, stdin/stdout/dev, and RFCOMM.
+- Transport abstraction for in-memory, TCP/dev, stdin/stdout/dev, and BLE GATT.
 - Fake `mba-player` backend for tests.
 - Local protocol exerciser.
-- BlueZ RFCOMM profile registration.
+- BlueZ GATT service registration and BLE advertising.
 - Pairing/trust state under `/data/matchbox-audio/bt`.
 - Yocto packaging and `mba-bt.service`.
 
@@ -56,7 +63,7 @@ Owns the native user experience.
 - Compose screens for now playing, library, queue, setup, and settings.
 - View models and repository layer.
 - Fake and scripted transports for local development.
-- Real RFCOMM transport.
+- Real BLE GATT transport.
 - Connection lifecycle and reconnect behavior.
 - Signed debug/release APK build path.
 
@@ -74,28 +81,52 @@ Owns local confidence before hardware testing.
 
 - [x] Write Android app design document.
 - [x] Write Android app execution plan.
-- [ ] Validate `bluer` RFCOMM/Profile API support on the development host.
-- [ ] Validate `bluer` RFCOMM/Profile API support on the target image.
-- [ ] Decide whether direct `zbus` BlueZ integration is needed.
-- [ ] Confirm Android target phone can discover and pair with a custom RFCOMM
-  service without BLE advertising.
-- [ ] Decide first private APK distribution path after local installs.
+- [x] Identify existing pi-base BLE GATT precedent from the Improv Wi-Fi
+  provisioner.
+- [x] Define Matchbox BLE service UUID and characteristic layout.
+- [x] Define initial BLE chunk envelope, max message size, and paging defaults.
+- [x] Validate `bluer` GATT/advertising API support on the development host
+  with `tools/ble-gatt-spike` on May 16, 2026.
+- [x] Validate `bluer` GATT/advertising API support on the target image with
+  `tools/ble-gatt-spike` on `matchbox-audio.local` on May 16, 2026.
+- [x] Decide whether direct `zbus` BlueZ integration is needed: not for the
+  initial GATT/advertising implementation unless later Android testing exposes
+  a `bluer` gap.
+- [x] Confirm Android target phone can scan, connect, subscribe to
+  notifications, request MTU, and exchange a chunked `system.hello`.
+  - [x] Add `tools/android-ble-smoke` client for the phone-side proof.
+  - [x] Extend `tools/ble-gatt-spike` to reassemble chunked `system.hello` and
+    send a chunked response.
+  - [x] Build/install the smoke APK with Android Studio.
+  - [x] Run against a Pixel 7 Pro and `matchbox-audio.local` on May 16, 2026:
+    scan found `Matchbox Audio`, MTU 517 succeeded, Status read succeeded, TX
+    notifications delivered a three-chunk `system.hello` response.
+- [x] Decide first private APK distribution path after local installs:
+  continue using Android Studio or `adb install` for development, then use a
+  manually distributed signed APK when the app controls real playback. Keep the
+  signing key outside git. Defer Play Store, Firebase App Distribution, and
+  other hosted distribution until there are multiple testers.
 
 Exit criteria:
 
-- The RFCOMM server approach is proven on the Pi or a clear fallback is chosen.
-- The target Android phone can complete at least one manual RFCOMM connection.
+- The BLE GATT approach is proven on the Pi or a clear fallback is chosen.
+- The target Android phone can complete at least one manual BLE exchange.
+- The first chunk/message limits are documented.
+- The private APK path is decided.
 - The project has enough confidence to add `mba-bt` to the workspace.
 
 ## Phase 1: Shared Protocol Fixtures
 
 - [ ] Add shared protocol fixture directory.
 - [ ] Define request, response, event, and error envelopes in `mba-protocol`.
-- [ ] Define frame format and max frame size.
+- [ ] Define logical message format and max message size.
+- [ ] Define BLE chunk format and reassembly rules.
+- [ ] Define paged library and queue response shapes.
 - [ ] Add Rust encode/decode tests for core fixtures.
-- [ ] Add Rust frame parser tests:
-  - [ ] partial read
-  - [ ] oversized frame
+- [ ] Add Rust message/chunk parser tests:
+  - [ ] partial message
+  - [ ] missing chunk
+  - [ ] oversized message
   - [ ] malformed JSON
   - [ ] unknown method
   - [ ] unsupported protocol version
@@ -121,15 +152,18 @@ Exit criteria:
 
 - `cargo test -p mba-protocol` validates the protocol fixtures.
 - The envelope supports request/response and unsolicited events.
+- BLE chunking can round-trip valid fixture messages and reject malformed or
+  oversized messages.
 - Fixture format is stable enough for Android tests to consume.
 
 ## Phase 2: `mba-bt` Local Bridge
 
 - [ ] Add `crates/mba-bt`.
 - [ ] Add `mba-bt` to the workspace.
-- [ ] Implement transport trait or equivalent stream abstraction.
+- [ ] Implement transport trait or equivalent message abstraction.
 - [ ] Implement in-memory transport tests.
-- [ ] Implement framed protocol read/write.
+- [ ] Implement local framed protocol read/write for TCP/stdin dev tools.
+- [ ] Implement BLE chunk/reassembly transport tests.
 - [ ] Implement `system.hello`.
 - [ ] Implement `system.snapshot`.
 - [ ] Implement event subscription plumbing with fake events.
@@ -142,7 +176,7 @@ Exit criteria:
   - [ ] auth-required response
   - [ ] busy response
   - [ ] player unavailable response
-  - [ ] malformed frame handling
+  - [ ] malformed chunk/message handling
   - [ ] unsupported method response
   - [ ] event delivery to subscribed client
 
@@ -150,16 +184,21 @@ Exit criteria:
 
 - `cargo test -p mba-bt` passes without Bluetooth hardware.
 - A local developer tool can send framed requests and receive framed responses.
+- The same bridge logic can run through an in-memory BLE-chunked transport.
 - The bridge can be tested against a fake player backend.
 
-## Phase 3: BlueZ RFCOMM Integration
+## Phase 3: BlueZ BLE GATT Integration
 
-- [ ] Add BlueZ RFCOMM implementation behind the transport boundary.
-- [ ] Register Matchbox RFCOMM profile with a stable service UUID.
-- [ ] Advertise a useful device/service name.
-- [ ] Accept a manual RFCOMM connection from a Linux client.
-- [ ] Accept a manual RFCOMM connection from the Android target phone.
-- [ ] Verify automatic channel discovery from Android.
+- [ ] Add BlueZ BLE GATT implementation behind the transport boundary.
+- [ ] Register Matchbox GATT service with a stable service UUID.
+- [ ] Add read-only capabilities/status characteristic.
+- [ ] Add app-to-device write characteristic.
+- [ ] Add device-to-app notify characteristic.
+- [ ] Advertise useful device/service name and pairing-mode state.
+- [ ] Accept a manual BLE connection from the Android target phone.
+- [ ] Verify MTU request behavior on the Android target phone.
+- [ ] Verify chunked `system.hello` and `system.snapshot` over real BLE.
+- [ ] Verify oversized response rejection or pagination behavior.
 - [ ] Add service logging for connection, disconnect, and protocol errors.
 - [ ] Add `mba-cli bt status`.
 - [ ] Add `mba-cli bt pairing start --timeout <seconds>`.
@@ -169,7 +208,7 @@ Exit criteria:
 
 Exit criteria:
 
-- A real Android phone can connect to the Pi over RFCOMM.
+- A real Android phone can connect to the Pi over BLE GATT.
 - `system.hello` and `system.snapshot` work over real Bluetooth.
 - A second connection attempt is rejected or closed cleanly.
 - Pairing mode can be started and stopped from the CLI.
@@ -177,13 +216,14 @@ Exit criteria:
 ## Phase 4: Device Packaging
 
 - [ ] Add `mba-bt.service`.
-- [ ] Add service hardening appropriate for BlueZ/RFCOMM access.
+- [ ] Add service hardening appropriate for BlueZ GATT/advertising access.
 - [ ] Add persistent state directory under `/data/matchbox-audio/bt`.
 - [ ] Add Yocto install rules for `mba-bt`.
 - [ ] Include any required BlueZ config or policy.
 - [ ] Add remote smoke-test checks for:
   - [ ] service active
-  - [ ] profile registration
+  - [ ] GATT service registration
+  - [ ] advertising while pairing mode is active
   - [ ] pairing mode CLI
   - [ ] local fake transport routing
 - [ ] Verify A/B update preserves authorized clients.
@@ -200,9 +240,11 @@ Exit criteria:
 - [ ] Add Kotlin + Jetpack Compose baseline.
 - [ ] Add package/application ID.
 - [ ] Add app signing placeholders for debug and local release builds.
+- [ ] Document local release APK build/install commands.
 - [ ] Add Android Bluetooth permissions.
 - [ ] Add `MatchboxTransport` interface.
 - [ ] Add fake scripted transport.
+- [ ] Add BLE transport implementation shell behind the interface.
 - [ ] Add protocol fixture tests on the JVM.
 - [ ] Add Compose navigation:
   - [ ] setup
@@ -221,11 +263,14 @@ Exit criteria:
   device for fake-transport UI tests.
 - A debug APK installs and runs without needing Bluetooth.
 
-## Phase 6: Android RFCOMM Connection
+## Phase 6: Android BLE Connection
 
-- [ ] Add Classic Bluetooth scan/association flow.
+- [ ] Add BLE scan/association flow.
 - [ ] Add known-device reconnect flow.
-- [ ] Add RFCOMM socket connect/disconnect.
+- [ ] Add GATT connect/disconnect.
+- [ ] Add Matchbox service discovery.
+- [ ] Add characteristic write and notification subscription.
+- [ ] Add MTU request and conservative-MTU fallback behavior.
 - [ ] Add protocol read/write loop.
 - [ ] Add connection status UI.
 - [ ] Add permission-denied UI.
@@ -237,6 +282,7 @@ Exit criteria:
 - [ ] Verify app reconnects after app process restart.
 - [ ] Verify app reconnects after phone lock/unlock.
 - [ ] Verify app behavior while phone is connected to car Bluetooth audio.
+- [ ] Decide whether RFCOMM fallback still needs a spike.
 
 Exit criteria:
 
@@ -264,11 +310,13 @@ Exit criteria:
 - [ ] Library screen:
   - [ ] root listing
   - [ ] nested directory navigation
+  - [ ] paged listing load-more behavior
   - [ ] enqueue file
   - [ ] enqueue directory
   - [ ] up/back behavior
 - [ ] Queue screen:
   - [ ] list queue
+  - [ ] paged queue load-more behavior if queue exceeds one response
   - [ ] play queue item
   - [ ] play item next
   - [ ] remove item
@@ -314,6 +362,7 @@ Exit criteria:
 - [ ] Multiple short trips with power loss between trips.
 - [ ] One hour continuous playback and browsing.
 - [ ] Large library browse with 30 GB or more of music.
+- [ ] Large directory browse that crosses one BLE message page.
 - [ ] Phone lock/unlock during playback.
 - [ ] Pi reboot while app is open.
 - [ ] App process kill/restart.
@@ -379,7 +428,7 @@ surface simple enough that it is practical to run during normal development.
 
 ## Deferral List
 
-- BLE discovery/pairing assist.
+- RFCOMM fallback implementation.
 - Artwork and thumbnail cache.
 - Search.
 - Multi-client control.

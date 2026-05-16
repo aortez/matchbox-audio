@@ -35,23 +35,38 @@ or replacing the web app.
 - Music sync or file upload over Bluetooth in the first Android app version.
 - Replacing MPD as the playback engine.
 - Replacing the web app as the only supported control surface.
-- Using BLE as the main player data transport.
+- Artwork transfer, bulk library sync, or large diagnostics over Bluetooth in
+  the first Android app version.
 - Depending on Play Store deployment for development or personal-device use.
 
 ## Transport Decision
 
-Use Bluetooth Classic RFCOMM as the main Android app transport.
+Use BLE GATT as the main Android app control transport.
 
-RFCOMM gives the app and device a bidirectional byte stream. That matches the
-shape of the existing HTTP/WebSocket API better than BLE GATT characteristics:
-requests, responses, subscriptions, queue diffs, library listings, and metadata
-can all ride over one framed stream.
+BLE is more constrained than Bluetooth Classic RFCOMM, but it matches the
+near-term product scope if the protocol is designed carefully. Android v1 needs
+metadata, playback commands, queue edits, device state, event notifications, and
+paged library browsing. It does not need artwork, bulk library sync, music
+transfer, or large diagnostics over Bluetooth.
 
-BLE remains optional. It is useful for discovery and onboarding, but it should
-not carry the full player protocol unless a future device constraint forces
-that choice.
+The cost is that `mba-bt` must provide a real message transport over GATT:
+chunking, reassembly, request/response correlation, notification flow control,
+bounded payloads, reconnect cleanup, and paged result shapes for anything that
+can grow. That complexity should live below the app-level Matchbox protocol so
+the same request, response, event, and error envelopes can still be exercised
+over in-memory transports and local development tools.
 
 Recommended first implementation:
+
+```text
+Android app
+  -> BLE GATT
+  -> mba-bt bridge daemon
+  -> localhost mba-player API
+  -> MPD
+```
+
+Fallback if BLE proves unreliable on the target phone:
 
 ```text
 Android app
@@ -61,37 +76,41 @@ Android app
   -> MPD
 ```
 
-Optional later onboarding layer:
+## BLE Scope
 
-```text
-Android app
-  -> BLE advertisement discovers "Matchbox Audio in pairing mode"
-  -> app initiates Classic pairing/RFCOMM connection
-```
-
-## BLE Role
-
-BLE has a purpose, but only as a side channel.
+BLE carries the main control protocol, but only within bounded message sizes.
 
 Useful BLE responsibilities:
 
 - Advertise that the device is in Matchbox pairing mode.
 - Expose device name, firmware version, and stable device identifier.
 - Provide a friendly "identify" action while pairing.
-- Carry an out-of-band pairing hint or code if Classic discovery is clumsy.
+- Carry pairing/trust handshake messages.
+- Carry playback commands, now-playing snapshots, queue edits, and events.
+- Carry paged library and queue listings.
 - Reuse or revive the existing Improv Wi-Fi provisioner for home Wi-Fi setup.
 
-Responsibilities BLE should not take:
+Responsibilities BLE should not take in v1:
 
-- Library browsing.
-- Queue editing.
-- Search.
 - Artwork transfer.
-- The normal app command/event stream.
+- Bulk full-library synchronization.
+- Music upload or sync.
+- Large diagnostics export.
+- System update transfer.
 
-Start without BLE unless Classic discovery/pairing is poor on the target phone.
-Adding BLE before the RFCOMM app works adds a second Bluetooth subsystem before
-the product flow has proven itself.
+Design constraints:
+
+- Treat BLE as message-oriented, not as a raw byte stream.
+- Request a larger MTU when Android allows it, but keep the protocol correct at
+  conservative MTU sizes.
+- Define a maximum app-level message size and reject larger responses with a
+  structured error.
+- Page any listing that can grow beyond one small response.
+- Send events as best-effort notifications and recover state with
+  `system.snapshot` after reconnect.
+- Allow only one active control session initially.
+- Keep RFCOMM as a fallback transport behind the same `MatchboxTransport`
+  boundary if field testing exposes BLE problems.
 
 ## Device Architecture
 
@@ -103,9 +122,9 @@ Add a new Rust daemon:
   otherwise a narrowly hardened service with only the Bluetooth permissions it
   needs.
 - Responsibilities:
-  - Register a Matchbox Bluetooth Classic RFCOMM profile with BlueZ.
+  - Register a Matchbox BLE GATT service and advertisement with BlueZ.
   - Accept one active control session initially.
-  - Parse and validate framed protocol messages.
+  - Chunk, reassemble, parse, and validate protocol messages.
   - Proxy supported commands to `mba-player` over localhost HTTP.
   - Subscribe or poll for player state and send events to the app.
   - Enforce pairing authorization and client trust.
@@ -115,10 +134,12 @@ Add a new Rust daemon:
 Bluetooth should translate into the same command model used by the web app and
 CLI.
 
-The Linux implementation should be validated with BlueZ's D-Bus Profile API.
-If Rust crate support is too thin, isolate that BlueZ integration behind a
-small module so the player protocol and business logic stay testable without
-Bluetooth hardware.
+The Linux implementation should be validated with BlueZ's D-Bus GATT and
+advertising APIs. The existing pi-base Improv Wi-Fi provisioner already proves
+the basic `bluer` GATT path on Raspberry Pi-class devices. If Rust crate support
+is too thin for the Matchbox service shape, isolate direct `zbus` integration
+behind a small module so the player protocol and business logic stay testable
+without Bluetooth hardware.
 
 ## Android Architecture
 
@@ -146,7 +167,7 @@ App layers:
 - View models: app state, loading/error state, selected device, queue edits,
   current browse path.
 - Repository: player operations expressed in Matchbox domain terms.
-- Transport: Bluetooth RFCOMM implementation plus a fake transport for tests.
+- Transport: BLE GATT implementation plus a fake transport for tests.
 - Protocol: generated or manually synchronized DTOs and message envelopes.
 - Cache: local library/artwork cache, likely Room or simple file cache after
   the first end-to-end version.
@@ -154,8 +175,8 @@ App layers:
 Android permissions:
 
 - Use Android 12+ nearby-device Bluetooth permissions.
-- Use the Companion Device Manager flow if it improves pairing without asking
-  for location permissions.
+- Use BLE scan/connect permissions and the Companion Device Manager flow if it
+  improves device association without asking for location permissions.
 - Do not require location unless Android version or discovery behavior makes it
   unavoidable.
 
@@ -175,7 +196,7 @@ crates/mba-player/web/      Current web app, later TypeScript DTOs if migrated
 The goal is to keep these clients speaking the same product language:
 
 - Rust daemon and CLI.
-- Android app over RFCOMM.
+- Android app over BLE GATT.
 - Web app over HTTP/WebSocket.
 
 Preferred near-term approach:
@@ -201,15 +222,113 @@ working on the real phone.
 
 ## Protocol
 
-Use framed JSON messages over the RFCOMM stream. A simple fixed-width length
-prefix is preferred over newline-delimited JSON for the app protocol.
+Use transport-neutral JSON messages for the app protocol. Local development
+streams can use a fixed-width length prefix. BLE carries the same logical
+messages through a small chunk envelope over GATT characteristics.
 
-Frame:
+Logical message:
 
 ```text
 uint32_le json_length
 utf8_json_payload
 ```
+
+BLE characteristics:
+
+```text
+Matchbox Control Service
+  capabilities/status: read
+  rx: write or write-with-response, app -> device chunks
+  tx: notify, device -> app chunks
+```
+
+Initial UUID layout:
+
+| Item | UUID | Properties | Purpose |
+| ---- | ---- | ---------- | ------- |
+| Matchbox Control Service | `1cef04f1-966e-43ad-860f-086db4f277d6` | primary service | Groups the Matchbox Android control protocol. |
+| Status characteristic | `bd539314-4637-416b-a3b5-804fecd5b792` | read | Reports protocol versions, transport limits, device identity, pairing state, and busy state. |
+| RX characteristic | `fbf39e22-bb07-49bf-bfa0-3dbdfc47769b` | write-with-response | Receives app-to-device protocol chunks. |
+| TX characteristic | `fcc9055c-34e3-46d9-a010-bd8a4f180b0c` | notify | Sends device-to-app protocol chunks after the app subscribes. |
+
+Start with write-with-response for RX. It is conservative, but it gives Android
+an explicit success/failure callback for each chunk. If later profiling shows
+that request throughput is too slow, add write-without-response behind the same
+transport abstraction after flow control is proven.
+
+Initial advertisement:
+
+- Advertise the Matchbox Control Service UUID.
+- Use a local name derived from the device name, such as `Matchbox Audio` or the
+  configured hostname.
+- Include only small service data if needed for pairing-mode state or protocol
+  version. Keep detailed state in the readable Status characteristic because BLE
+  advertisements have tight size limits.
+
+BLE chunk envelope:
+
+```text
+0..1    magic bytes: "MB"
+2       chunk protocol version: 1
+3       flags
+4..7    transport message_id: u32_le
+8..9    chunk_index: u16_le
+10..11  chunk_count: u16_le
+12..15  total_message_len: u32_le
+16..    payload_fragment
+```
+
+Initial flags:
+
+| Bit | Name | Meaning |
+| --- | ---- | ------- |
+| 0 | first_chunk | This is the first chunk for `message_id`. |
+| 1 | last_chunk | This is the final chunk for `message_id`. |
+
+Initial transport rules:
+
+- Use one in-flight message per direction.
+- Chunks for a message must arrive in order.
+- `chunk_index` is zero-based.
+- `chunk_count` must be known up front and must match the final chunk.
+- `total_message_len` is the full JSON message length before chunking.
+- Reject bad magic bytes, unsupported chunk versions, duplicate chunks, missing
+  chunks, out-of-order chunks, inconsistent lengths, and oversized messages.
+- Clean up partial messages on disconnect.
+- Keep chunk boundaries independent from JSON message boundaries.
+
+Initial limits:
+
+| Limit | Value | Meaning |
+| ----- | ----- | ------- |
+| `max_message_bytes` | 16 KiB | Hard limit for any complete JSON request, response, or event. |
+| `target_response_bytes` | 8 KiB | Soft target for normal responses, especially paged listings. |
+| `target_gatt_value_bytes` | 244 bytes | Conservative starting size for one characteristic write or notification. |
+| `chunk_header_bytes` | 16 bytes | Header size before each payload fragment. |
+| `target_chunk_payload_bytes` | 228 bytes | Payload per chunk when using the conservative 244-byte GATT value target. |
+
+Android should request a larger MTU when connected, but the protocol must remain
+correct at conservative GATT value sizes. If the negotiated link supports larger
+values reliably, the transport can increase chunk payload size without changing
+the app-level protocol.
+
+Paging defaults:
+
+| Setting | Value | Meaning |
+| ------- | ----- | ------- |
+| `default_page_limit` | 50 items | The normal Android request size for library and queue pages. |
+| `max_page_limit` | 100 items | The largest page size the device accepts. |
+| `target_page_response_bytes` | 8 KiB | Device should try to keep a page response under this size. |
+
+The byte target wins over item count. If 50 items would exceed the response
+target, the device may return fewer items with `has_more: true`. If a single
+logical response would exceed `max_message_bytes`, the device rejects it with a
+structured error and the app should retry with a smaller page or narrower
+request.
+
+Paged listing requests should include `cursor` and `limit` parameters. Responses
+should include `next_cursor` and `has_more` so Android can load the next page on
+demand instead of asking BLE to carry a whole library or queue.
 
 Request:
 
@@ -269,14 +388,16 @@ Error:
 
 Connection handshake:
 
-1. App opens RFCOMM connection.
-2. App sends `hello` with app version and supported protocol versions.
-3. Device responds with selected protocol version, capabilities, device name,
-   build version, and pairing/trust state.
-4. If untrusted, device requires pairing authorization before accepting control
+1. App scans for the Matchbox BLE advertisement.
+2. App connects and discovers the Matchbox Control Service.
+3. App subscribes to the `tx` notification characteristic.
+4. App sends `system.hello` with app version and supported protocol versions.
+5. Device responds with selected protocol version, capabilities, device name,
+   build version, BLE transport limits, and pairing/trust state.
+6. If untrusted, device requires pairing authorization before accepting control
    commands.
-5. App requests an initial snapshot.
-6. App subscribes to events.
+7. App requests an initial snapshot.
+8. App subscribes to events.
 
 Core method groups:
 
@@ -366,7 +487,9 @@ Music sync, system updates, and large diagnostics remain Wi-Fi/SSH workflows.
 - Add JSON fixture tests for requests, responses, events, and errors.
 - Decide on generated Kotlin DTOs versus manually maintained Kotlin DTOs.
 - Define protocol versioning and capability negotiation.
-- Add a fake stream harness for protocol round-trip tests.
+- Define BLE transport limits, chunking, reassembly, and max message size.
+- Define paged response shapes for library and queue listings.
+- Add a fake transport harness for protocol round-trip tests.
 - Add a shared fixture directory that both Rust and Android tests consume.
 - Define a transport abstraction before any real Bluetooth code lands.
 
@@ -375,26 +498,29 @@ Exit criteria:
 - Rust can encode/decode the protocol fixtures.
 - Kotlin can encode/decode the same fixtures, even if the Android UI is not
   started yet.
+- BLE chunking can round-trip fixture messages and reject malformed chunks.
 - The protocol can be exercised through an in-memory stream without BlueZ,
   Android, or Bluetooth hardware.
 
 ### Phase B: `mba-bt` Bridge Spike
 
 - Add the `mba-bt` crate.
-- Implement the stream protocol against an in-memory test transport.
+- Implement the protocol against an in-memory test transport.
+- Implement the BLE-style chunker/reassembler against in-memory tests.
 - Proxy `system.hello`, `system.snapshot`, and a small playback command subset
   to local `mba-player`.
 - Add a fake `mba-player` backend for deterministic bridge tests.
 - Add local CLI test tools that can speak the framed protocol over stdin/stdout
-  or TCP before RFCOMM is working.
-- Validate BlueZ RFCOMM profile registration on the Pi.
+  or TCP before real BLE is working.
+- Validate BlueZ GATT service registration and advertising on the Pi.
 - Package `mba-bt.service` in the Yocto image.
 
 Exit criteria:
 
 - `cargo test` covers framing, bridge routing, disconnect cleanup, auth gates,
   and one-active-client behavior without Bluetooth hardware.
-- A physical Android phone or Linux test client can connect over RFCOMM.
+- A physical Android phone can scan for the BLE advertisement, connect, subscribe
+  to notifications, and exchange `system.hello`.
 - `system.snapshot` returns real player status.
 - The service survives disconnect/reconnect without restarting the whole player.
 
@@ -408,7 +534,8 @@ Exit criteria:
   development and tests.
 - Add JVM tests for protocol fixtures, view models, and connection state.
 - Add instrumented Compose tests that run against the fake transport.
-- Add RFCOMM connect/disconnect and protocol read/write.
+- Add BLE scan/connect, GATT discovery, characteristic write/notify, and
+  protocol read/write.
 - Add connection status, error display, and manual reconnect.
 
 Exit criteria:
@@ -464,9 +591,12 @@ Device deployment:
 Android deployment:
 
 - Start with local debug APK installs from Gradle.
-- Add a signed release build once the app controls real playback reliably.
-- Use GitHub Releases or another private distribution path before considering
-  Play Store distribution.
+- Add a signed release APK once the app controls real playback reliably.
+- Keep the release signing key outside git; only checked-in Gradle placeholders
+  should refer to local/private signing configuration.
+- Distribute the signed APK manually at first.
+- Use GitHub Releases, Firebase App Distribution, or Play internal testing only
+  after there are multiple testers.
 - Version the app and device protocol independently; the handshake selects the
   compatible protocol version.
 
@@ -499,10 +629,10 @@ have a single obvious local command.
 
 Build these seams into the first implementation:
 
-- A Rust stream abstraction for `mba-bt`, so the protocol bridge can run over
-  in-memory streams, TCP loopback, stdin/stdout tools, or real RFCOMM.
+- A Rust transport abstraction for `mba-bt`, so the protocol bridge can run over
+  in-memory transports, TCP loopback, stdin/stdout tools, or real BLE GATT.
 - A fake `mba-player` client for bridge tests.
-- A Kotlin `MatchboxTransport` interface with fake, scripted, and real RFCOMM
+- A Kotlin `MatchboxTransport` interface with fake, scripted, and real BLE GATT
   implementations.
 - A fake Android player repository for Compose UI and view-model tests.
 - A shared fixture directory for JSON protocol examples.
@@ -517,14 +647,16 @@ can be verified independently from the radio.
 Rust tests:
 
 - Protocol fixture serialization/deserialization.
-- Frame parser tests for partial reads, oversized frames, malformed JSON, and
-  disconnects.
+- Chunk/reassembly tests for partial messages, oversized messages, malformed
+  chunks, disconnect cleanup, and missing chunks.
+- Frame parser tests for local stream transports, oversized frames, malformed
+  JSON, and disconnects.
 - `mba-bt` bridge tests against a fake `mba-player`.
 - Command authorization tests.
 - Reconnect and one-active-client behavior.
 - Fake transport tests for hello, snapshot, request routing, event subscribe,
   auth-required, busy, unsupported method, player unavailable, and malformed
-  frame handling.
+  chunk/message handling.
 
 Android unit tests:
 
@@ -535,7 +667,7 @@ Android unit tests:
 - Error rendering tests for unavailable device, auth required, and protocol
   mismatch.
 - Scripted fake-transport tests for reconnect backoff, stale response IDs,
-  out-of-order events, and stream disconnects.
+  out-of-order events, and transport disconnects.
 
 Android instrumented tests with fake transport:
 
@@ -549,7 +681,8 @@ Android instrumented tests with fake transport:
 Android instrumented/manual tests:
 
 - Pairing flow on the target phone.
-- RFCOMM connect/disconnect.
+- BLE scan/connect/disconnect.
+- GATT service discovery, write, notification subscription, and MTU negotiation.
 - Reconnect after phone lock/unlock.
 - Reconnect after app process kill.
 - Reconnect after Pi power cycle.
@@ -562,22 +695,23 @@ Emulation:
 
 - Use Android emulator or Gradle managed devices for UI tests that do not need
   real Bluetooth.
-- Treat Android emulator Bluetooth support as an optional spike for the real
-  RFCOMM path, not as a required foundation for the project.
-- Consider BlueZ virtual-controller tools only after the real RFCOMM bridge is
-  working on the Pi; they are useful for service-level experiments but should
-  not block app development.
+- Treat Android emulator Bluetooth support as an optional spike for the real BLE
+  path, not as a required foundation for the project.
+- Consider BlueZ virtual-controller tools only after the real BLE bridge is
+  working on the Pi; they are useful for service-level experiments but should not
+  block app development.
 
 Device integration tests:
 
-- `mba-bt.service` starts and registers the profile.
+- `mba-bt.service` starts, registers the GATT service, and advertises in pairing
+  mode.
 - `mba-player` remains isolated from Bluetooth permissions.
 - Authorized clients persist across reboot and A/B update.
 - Forgetting a client prevents reconnect/control.
 - Bluetooth control and web control can operate at the same time.
 - Bluetooth control fails gracefully when MPD is unavailable.
 - SSH-driven smoke test starts pairing mode, checks service status, checks
-  profile registration, and verifies local protocol routing through a
+  GATT registration, advertising, and verifies local protocol routing through a
   non-Bluetooth test transport.
 
 Field tests:
@@ -586,6 +720,7 @@ Field tests:
 - Multiple short trips with power loss between trips.
 - At least one hour of continuous playback and browsing.
 - Large-library browsing with 30 GB or more of music.
+- Large directory browsing that crosses one BLE message page.
 - No audible playback disruption during Bluetooth reconnect.
 
 Hardware-in-loop tests:
@@ -600,6 +735,8 @@ Hardware-in-loop tests:
 
 ## Resolved Decisions
 
+- BLE GATT is the primary Android app control transport.
+- RFCOMM is a fallback transport only if BLE field testing is not good enough.
 - The first `mba-bt` release allows only one active app connection.
 - A second active client receives a structured `busy` response.
 - Android v1 shows no artwork because the device-side artwork cache is not
@@ -608,17 +745,16 @@ Hardware-in-loop tests:
   search/indexing are not ready yet.
 - Initial pairing mode should be CLI-triggered first because that is easiest to
   test. Hardware-button pairing can follow after the service flow works.
-- Android deployment starts with local debug APK installs, then signed release
-  APKs through a private artifact path. Firebase App Distribution is the next
-  step if more testers are needed.
+- Android deployment starts with local debug APK installs, then manually
+  distributed signed release APKs. Firebase App Distribution, GitHub Releases,
+  or Play internal testing are later options if more testers are needed.
 
 ## Remaining Questions
 
-- Validate `bluer` with `bluetoothd` and `rfcomm` features for BlueZ Profile
-  API support on the target image.
-- If `bluer` is insufficient, decide whether to use direct `zbus` integration
-  for the BlueZ Profile API.
-- Is Classic discovery good enough without BLE advertising on the target phone?
+- Verify reconnect behavior while the phone is connected to car Bluetooth audio
+  or calls.
+- If later implementation exposes a `bluer` limitation, decide whether to use
+  direct `zbus` integration for BlueZ GATT and advertising APIs.
 - What exact hardware-button gesture should enter Bluetooth pairing mode after
   the CLI path is proven?
 
@@ -627,29 +763,32 @@ Hardware-in-loop tests:
 Build in this order:
 
 1. Shared protocol fixtures.
-2. `mba-bt` stream bridge with a fake transport.
-3. BlueZ RFCOMM spike on the Pi.
+2. `mba-bt` bridge with fake and BLE-chunked transports.
+3. BlueZ BLE GATT advertising/service spike on the Pi.
 4. Native Kotlin/Compose app with fake data.
-5. Android RFCOMM connection and snapshot display.
+5. Android BLE connection and snapshot display.
 6. Full library and queue workflows.
 7. Pairing/trust polish.
-8. Optional BLE discovery if Classic pairing is not good enough.
+8. RFCOMM fallback only if BLE field testing is not good enough.
 
 This keeps the project moving toward a full Android player while avoiding early
-commitment to BLE, cross-platform UI, or Play Store packaging.
+commitment to cross-platform UI, Play Store packaging, or large Bluetooth data
+features.
 
 ## References
 
+- Android BLE overview:
+  <https://developer.android.com/develop/connectivity/bluetooth/ble/ble-overview>
 - Android Bluetooth data transfer:
   <https://developer.android.com/develop/connectivity/bluetooth/transfer-data>
-- Android `BluetoothSocket` API:
-  <https://developer.android.com/reference/android/bluetooth/BluetoothSocket>
 - Android Bluetooth permissions:
   <https://developer.android.com/develop/connectivity/bluetooth/bt-permissions>
 - Android companion device pairing:
   <https://developer.android.com/develop/connectivity/bluetooth/companion-device-pairing>
-- Android BLE overview:
-  <https://developer.android.com/develop/connectivity/bluetooth/ble/ble-overview>
+- Android `BluetoothGatt` API:
+  <https://developer.android.com/reference/android/bluetooth/BluetoothGatt>
+- Android `BluetoothSocket` API for possible RFCOMM fallback:
+  <https://developer.android.com/reference/android/bluetooth/BluetoothSocket>
 - Android test types and local/instrumented tests:
   <https://developer.android.com/training/testing/fundamentals>
 - Gradle managed devices:

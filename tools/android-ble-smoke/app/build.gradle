@@ -1,0 +1,16 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "dev.matchbox.ble_smoke"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "dev.matchbox.ble_smoke"
+        minSdk 23
+        targetSdk 35
+        versionCode 1
+        versionName "0.1.0"
+    }
+}
