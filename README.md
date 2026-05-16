@@ -1,14 +1,14 @@
 # Matchbox Audio
 
-Matchbox Audio is an in-car local music player for Raspberry Pi hardware. The
-first target is a Raspberry Pi Zero 2 W with a Pimoroni Pirate Audio Line Out
-board, local music storage, MPD playback, a Wi-Fi hotspot, and a browser-based
-control surface.
+Matchbox Audio is an in-car local music player for Raspberry Pi hardware. 
 
-Design notes live in:
+The first target is a Raspberry Pi Zero 2 W with a Pimoroni Pirate Audio Line Out
+board, local music storage, MPD playback, a Wi-Fi hotspot, and a webapp ui.  This
+is reasonably useable now.
 
-- `docs/requirements.md`
-- `docs/implementation-plan.md`
+The second target is an Android app, see docs/android-app-design.md.  This is WIP.
+
+Design notes live in /docs.
 
 ## Workspace
 
