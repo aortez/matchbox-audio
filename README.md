@@ -12,6 +12,8 @@ docs/android-app-plan.md.  This is WIP.
 
 Design notes live in /docs.
 
+The project is built on the [Sparkle Duck](https://github.com/aortez/sparkle-duck-shared) embedded device framework.
+
 Here's an example of prototype hardware and web app:
 ![matchbox-audio and Android web app](./matchbox-audio-2026-05-16.png "matchbox-audio and Android web app")
 
