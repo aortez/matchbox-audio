@@ -6,7 +6,8 @@ board and local music storage.
 The first target is MPD playback, a Wi-Fi hotspot, and a webapp ui.  This
 is reasonably useable now.
 
-The second target is an Android app, see docs/android-app-design.md.  This is WIP.
+The second target is an Android app, see docs/android-app-design.md and
+docs/android-app-plan.md.  This is WIP.
 
 Design notes live in /docs.
 
