@@ -1,5 +1,6 @@
 mod config;
 mod http;
+mod library;
 mod mpd;
 
 use std::{net::SocketAddr, path::PathBuf};
@@ -27,6 +28,10 @@ struct Args {
     #[arg(long)]
     mpd_addr: Option<SocketAddr>,
 
+    /// Path to the local music library root.
+    #[arg(long)]
+    music_root: Option<PathBuf>,
+
     /// Path to the network-mode helper script.
     #[arg(long, default_value = "/usr/bin/mba-network-mode")]
     network_script: PathBuf,
@@ -44,6 +49,9 @@ async fn main() -> Result<()> {
     if let Some(mpd_addr) = args.mpd_addr {
         config.mpd_addr = mpd_addr;
     }
+    if let Some(music_root) = args.music_root {
+        config.music_root = music_root;
+    }
 
     let status = StatusResponse::ready(
         env!("CARGO_PKG_VERSION"),
@@ -54,6 +62,7 @@ async fn main() -> Result<()> {
     let app = http::router(AppState {
         status,
         network_script: args.network_script,
+        library: library::LibraryBrowser::new(config.music_root),
         mpd,
     });
     let listener = TcpListener::bind(config.bind)

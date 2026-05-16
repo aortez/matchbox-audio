@@ -358,8 +358,10 @@ endpoints. `POST /api/v1/library/rescan` triggers MPD's `update` and returns
 server-side. `GET /api/v1/library?path=...` calls MPD `lsinfo` and returns
 single-level folders + tracks (`{path, directories: [{name, path}], tracks:
 [{uri, name, title?, artist?, album?, duration_s?}]}`) — recursive walks are
-deferred to the Phase 4 browse work. `mba-cli` exposes `rescan` and
-`library [path]`. Host-side ingestion is `npm run music-sync`, a Node script
+deferred to the Phase 4 browse work. Phase 4 later superseded this MPD-backed
+browse path with filesystem-backed browsing while keeping `/api/v1/library` as
+an alias. `mba-cli` exposes `rescan` and `library [path]`. Host-side ingestion
+is `npm run music-sync`, a Node script
 that reads repo-local `config/sync.local.json` (with `--source/--host/--user/
 --port/--dry-run/--no-delete` overrides), runs
 `rsync -av --delete --exclude=.DS_Store ...` to `matchbox@<host>:/data/music/`,
@@ -380,31 +382,54 @@ support is deferred to Phase 4.
 
 ## Phase 4: Filesystem Library Browsing and Queueing
 
-- [ ] Implement safe path handling under `/data/music`.
-- [ ] Do not follow symlinks.
-- [ ] Ignore hidden files and directories by default.
-- [ ] Use case-insensitive audio extension filtering.
-- [ ] Implement `GET /api/v1/library/list?path=...`.
+- [x] Implement safe path handling under `/data/music`.
+- [x] Do not follow symlinks.
+- [x] Ignore hidden files and directories by default.
+- [x] Use case-insensitive audio extension filtering.
+- [x] Implement `GET /api/v1/library/list?path=...`.
 - [x] Implement queue by file.
 - [x] Implement queue by directory.
-- [ ] Define stable recursive directory ordering:
-  - [ ] depth-first traversal
-  - [ ] directories before files
-  - [ ] case-insensitive name sort with original name as tie-breaker
-- [ ] Filter supported audio formats:
-  - [ ] Ogg
-  - [ ] MP3
-  - [ ] FLAC
-- [ ] Ignore non-audio files for playback operations.
-- [ ] Keep Phase 4 browsing and queueing filesystem/path-only.
-- [ ] Add CLI commands:
-  - [ ] `mba-cli list`
+- [x] Define stable recursive directory ordering:
+  - [x] depth-first traversal
+  - [x] directories before files
+  - [x] case-insensitive name sort with original name as tie-breaker
+- [x] Filter supported audio formats:
+  - [x] Ogg
+  - [x] MP3
+  - [x] FLAC
+- [x] Ignore non-audio files for playback operations.
+- [x] Keep Phase 4 browsing and queueing filesystem/path-only.
+- [x] Add CLI commands:
+  - [x] `mba-cli list`
   - [x] `mba-cli queue`
   - [x] `mba-cli clear`
   - [x] `mba-cli enqueue-file`
   - [x] `mba-cli enqueue-dir`
 - [ ] Test with files synced by SSH/`rsync` to `/data/music`.
-- [ ] Add filesystem traversal tests.
+- [x] Add filesystem traversal tests.
+
+Phase 4 local status: `mba-player` now serves filesystem-backed library
+browsing from the configured music root (default `/data/music`) through
+`GET /api/v1/library/list?path=...`, with the legacy `/api/v1/library` route
+kept as an alias. Browse and queue paths are normalized as relative library
+paths, hidden path components are rejected, symlinks are never traversed, and
+only Ogg/MP3/FLAC files are returned or queued. Directory queueing expands to a
+deterministic depth-first list with directories before files and
+case-insensitive ordering. `mba-cli list` uses the new endpoint, with
+`mba-cli library` kept as an alias, and the web library view uses the same
+filesystem-backed route.
+
+Phase 4 explicitly treats `/data/music` as a trusted owner/admin sync root, not
+as a hard descriptor-relative security boundary against concurrent local
+mutation. The traversal rejects unsafe relative paths and visible symlinks, but
+hard-boundary path opening is deferred unless the music root becomes writable by
+less-trusted actors. Filesystem browse results are intentionally path-only:
+`title`, `artist`, `album`, and `duration_s` may be absent until queue or
+now-playing data comes back from MPD. Directory enqueue rejects directories that
+contain no supported tracks. If MPD rejects a later file after earlier files
+were already added, the API reports that the queue may be partially updated and
+still attempts the same playback reconciliation/autoplay path before returning
+the failure.
 
 ## Phase 5: WebSocket Events and API Hardening
 
