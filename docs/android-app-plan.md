@@ -117,36 +117,36 @@ Exit criteria:
 
 ## Phase 1: Shared Protocol Fixtures
 
-- [ ] Add shared protocol fixture directory.
-- [ ] Define request, response, event, and error envelopes in `mba-protocol`.
-- [ ] Define logical message format and max message size.
-- [ ] Define BLE chunk format and reassembly rules.
-- [ ] Define paged library and queue response shapes.
-- [ ] Add Rust encode/decode tests for core fixtures.
-- [ ] Add Rust message/chunk parser tests:
-  - [ ] partial message
-  - [ ] missing chunk
-  - [ ] oversized message
-  - [ ] malformed JSON
-  - [ ] unknown method
-  - [ ] unsupported protocol version
-- [ ] Define initial method names:
-  - [ ] `system.hello`
-  - [ ] `system.snapshot`
-  - [ ] `events.subscribe`
-  - [ ] playback methods
-  - [ ] library list methods
-  - [ ] queue methods
-- [ ] Define stable error codes:
-  - [ ] `bad_request`
-  - [ ] `unauthorized`
-  - [ ] `auth_required`
-  - [ ] `busy`
-  - [ ] `not_found`
-  - [ ] `unsupported_method`
-  - [ ] `unsupported_version`
-  - [ ] `player_unavailable`
-  - [ ] `internal`
+- [x] Add shared protocol fixture directory.
+- [x] Define request, response, event, and error envelopes in `mba-protocol`.
+- [x] Define logical message format and max message size.
+- [x] Define BLE chunk format and reassembly rules.
+- [x] Define paged library and queue response shapes.
+- [x] Add Rust encode/decode tests for core fixtures.
+- [x] Add Rust message/chunk parser tests:
+  - [x] partial message
+  - [x] missing chunk
+  - [x] oversized message
+  - [x] malformed JSON
+  - [x] unknown method
+  - [x] unsupported protocol version
+- [x] Define initial method names:
+  - [x] `system.hello`
+  - [x] `system.snapshot`
+  - [x] `events.subscribe`
+  - [x] playback methods
+  - [x] library list methods
+  - [x] queue methods
+- [x] Define stable error codes:
+  - [x] `bad_request`
+  - [x] `unauthorized`
+  - [x] `auth_required`
+  - [x] `busy`
+  - [x] `not_found`
+  - [x] `unsupported_method`
+  - [x] `unsupported_version`
+  - [x] `player_unavailable`
+  - [x] `internal`
 
 Exit criteria:
 

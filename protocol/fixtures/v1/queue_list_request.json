@@ -1,0 +1,9 @@
+{
+  "type": "request",
+  "id": 4,
+  "method": "queue.list",
+  "params": {
+    "cursor": null,
+    "limit": 50
+  }
+}

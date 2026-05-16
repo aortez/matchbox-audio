@@ -1,0 +1,21 @@
+{
+  "type": "event",
+  "event": "playback.changed",
+  "payload": {
+    "playback": {
+      "state": "pause",
+      "volume": 65,
+      "queue_position": 2,
+      "queue_id": 44,
+      "track": {
+        "uri": "Pink Floyd/Dark Side/01 Speak to Me.flac",
+        "title": "Speak to Me",
+        "artist": "Pink Floyd",
+        "album": "Dark Side",
+        "duration_s": 91,
+        "elapsed_s": 15
+      },
+      "queue_length": 12
+    }
+  }
+}

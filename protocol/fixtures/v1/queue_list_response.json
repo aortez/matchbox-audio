@@ -1,0 +1,20 @@
+{
+  "type": "response",
+  "id": 4,
+  "ok": true,
+  "result": {
+    "items": [
+      {
+        "position": 0,
+        "id": 12,
+        "uri": "Pink Floyd/single.flac",
+        "name": "single.flac",
+        "title": "Single",
+        "artist": "Pink Floyd",
+        "duration_s": 214
+      }
+    ],
+    "next_cursor": null,
+    "has_more": false
+  }
+}

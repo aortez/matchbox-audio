@@ -1,0 +1,30 @@
+{
+  "type": "response",
+  "id": 1,
+  "ok": true,
+  "result": {
+    "selected_protocol_version": 1,
+    "device_name": "Matchbox Audio",
+    "build_version": "0.1.0",
+    "capabilities": [
+      "system.hello",
+      "system.snapshot",
+      "events.subscribe",
+      "ble.chunk.v1"
+    ],
+    "transport": {
+      "kind": "ble-gatt",
+      "chunk_protocol_version": 1,
+      "max_message_bytes": 16384,
+      "target_response_bytes": 8192,
+      "target_gatt_value_bytes": 244,
+      "chunk_header_bytes": 16,
+      "target_chunk_payload_bytes": 228,
+      "one_in_flight_per_direction": true
+    },
+    "pairing": {
+      "state": "trusted",
+      "trusted": true
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "type": "request",
+  "id": 1,
+  "method": "system.hello",
+  "params": {
+    "app": "android-ble-smoke",
+    "app_version": "0.1.0",
+    "supported_protocol_versions": [
+      1
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "type": "response",
+  "id": 3,
+  "ok": true,
+  "result": {
+    "path": "Pink Floyd",
+    "directories": [
+      {
+        "path": "Pink Floyd/Dark Side",
+        "name": "Dark Side"
+      }
+    ],
+    "tracks": [
+      {
+        "uri": "Pink Floyd/single.flac",
+        "name": "single.flac",
+        "title": "Single",
+        "artist": "Pink Floyd",
+        "duration_s": 214
+      }
+    ],
+    "next_cursor": "Pink Floyd:50",
+    "has_more": true
+  }
+}

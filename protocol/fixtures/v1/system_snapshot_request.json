@@ -1,0 +1,5 @@
+{
+  "type": "request",
+  "id": 2,
+  "method": "system.snapshot"
+}

@@ -1,7 +1,19 @@
 use serde::{Deserialize, Serialize};
 
+pub mod app;
+pub mod ble;
+
+pub use app::*;
+pub use ble::*;
+
 pub const API_VERSION: &str = "v1";
+pub const APP_PROTOCOL_VERSION: u16 = 1;
 pub const SERVICE_NAME: &str = "matchbox-audio";
+pub const DEVICE_DISPLAY_NAME: &str = "Matchbox Audio";
+pub const MAX_MESSAGE_BYTES: usize = 16 * 1024;
+pub const TARGET_RESPONSE_BYTES: usize = 8 * 1024;
+pub const DEFAULT_PAGE_LIMIT: u16 = 50;
+pub const MAX_PAGE_LIMIT: u16 = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatusResponse {

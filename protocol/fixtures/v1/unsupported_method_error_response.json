@@ -1,0 +1,9 @@
+{
+  "type": "response",
+  "id": 99,
+  "ok": false,
+  "error": {
+    "code": "unsupported_method",
+    "message": "unsupported method: debug.noop"
+  }
+}

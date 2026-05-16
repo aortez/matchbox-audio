@@ -1,0 +1,40 @@
+{
+  "type": "response",
+  "id": 2,
+  "ok": true,
+  "result": {
+    "status": {
+      "service": {
+        "name": "matchbox-audio",
+        "state": "ready",
+        "api_version": "v1"
+      },
+      "build": {
+        "version": "0.1.0",
+        "git_sha": "abc123"
+      },
+      "network": {
+        "mode": "car",
+        "active_connection": "matchbox-car-hotspot",
+        "ssid": "matchbox-audio",
+        "ip4": "10.42.0.1",
+        "hotspot_ssid": "matchbox-audio"
+      },
+      "playback": {
+        "state": "play",
+        "volume": 65,
+        "queue_position": 2,
+        "queue_id": 44,
+        "track": {
+          "uri": "Pink Floyd/Dark Side/01 Speak to Me.flac",
+          "title": "Speak to Me",
+          "artist": "Pink Floyd",
+          "album": "Dark Side",
+          "duration_s": 91,
+          "elapsed_s": 12
+        },
+        "queue_length": 12
+      }
+    }
+  }
+}

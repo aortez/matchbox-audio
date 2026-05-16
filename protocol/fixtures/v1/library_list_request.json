@@ -1,0 +1,10 @@
+{
+  "type": "request",
+  "id": 3,
+  "method": "library.list",
+  "params": {
+    "path": "Pink Floyd",
+    "cursor": null,
+    "limit": 50
+  }
+}
