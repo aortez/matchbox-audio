@@ -66,11 +66,13 @@ cargo run -p mba-cli -- --server http://127.0.0.1:8090 status
 
 ```json
 {
-  "bind": "127.0.0.1:8090"
+  "bind": "127.0.0.1:8090",
+  "music_root": "/data/music"
 }
 ```
 
-Command-line `--bind` overrides the config file.
+Command-line `--bind`, `--mpd-addr`, and `--music-root` override the config
+file.
 
 ## Remote Device Update
 

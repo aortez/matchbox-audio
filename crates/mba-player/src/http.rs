@@ -1,5 +1,5 @@
 use std::{
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     time::Duration,
 };
 
@@ -17,7 +17,10 @@ use serde::Deserialize;
 use tokio::{process::Command, time::timeout};
 use tracing::warn;
 
-use crate::mpd::{MpdError, MpdHandle, QueueItemTarget};
+use crate::{
+    library::{LibraryBrowser, LibraryError},
+    mpd::{MpdError, MpdHandle, QueueItemTarget},
+};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
 const APP_CSS: &str = include_str!("../web/app.css");
@@ -27,6 +30,7 @@ const APP_JS: &str = include_str!("../web/app.js");
 pub struct AppState {
     pub status: StatusResponse,
     pub network_script: PathBuf,
+    pub library: LibraryBrowser,
     pub mpd: MpdHandle,
 }
 
@@ -45,6 +49,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/playback/seek", post(seek))
         .route("/api/v1/playback/volume", post(volume))
         .route("/api/v1/library", get(library))
+        .route("/api/v1/library/list", get(library))
         .route("/api/v1/library/rescan", post(rescan))
         .route("/api/v1/queue", get(queue).delete(clear_queue))
         .route("/api/v1/queue/play", post(play_queue_item))
@@ -153,7 +158,7 @@ async fn library(
     State(state): State<AppState>,
     Query(query): Query<LibraryQuery>,
 ) -> Result<Json<LibraryListing>, ApiError> {
-    let listing = state.mpd.list_library(query.path).await?;
+    let listing = state.library.list(&query.path)?;
     Ok(Json(listing))
 }
 
@@ -176,7 +181,7 @@ async fn enqueue_file(
     State(state): State<AppState>,
     Json(req): Json<QueuePathRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let path = validate_queue_path(req.path)?;
+    let path = state.library.validate_track_path(&req.path)?;
     state.mpd.enqueue(path).await?;
     Ok(StatusCode::ACCEPTED)
 }
@@ -185,8 +190,8 @@ async fn enqueue_directory(
     State(state): State<AppState>,
     Json(req): Json<QueuePathRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let path = validate_queue_path(req.path)?;
-    state.mpd.enqueue_directory(path).await?;
+    let paths = state.library.audio_files_for_directory(&req.path)?;
+    state.mpd.enqueue_paths(paths).await?;
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -254,34 +259,6 @@ fn queue_item_target(id: Option<u64>, position: Option<u32>) -> Result<QueueItem
     Err(ApiError::bad_request("id or position is required"))
 }
 
-fn validate_queue_path(path: String) -> Result<String, ApiError> {
-    let path = path.trim().to_string();
-    if path.is_empty() {
-        return Err(ApiError::bad_request("path must not be empty"));
-    }
-    if path.contains('\0') {
-        return Err(ApiError::bad_request("path must not contain NUL bytes"));
-    }
-    if path.contains("://") || path.starts_with("file:") {
-        return Err(ApiError::bad_request("path must be a library path"));
-    }
-    let library_path = Path::new(&path);
-    if library_path.is_absolute() {
-        return Err(ApiError::bad_request("path must be relative"));
-    }
-    for component in library_path.components() {
-        match component {
-            Component::Normal(_) => {}
-            Component::CurDir => return Err(ApiError::bad_request("path must not contain .")),
-            Component::ParentDir => return Err(ApiError::bad_request("path must not contain ..")),
-            Component::RootDir | Component::Prefix(_) => {
-                return Err(ApiError::bad_request("path must be relative"));
-            }
-        }
-    }
-    Ok(path)
-}
-
 #[derive(Debug)]
 struct ApiError {
     status: StatusCode,
@@ -302,6 +279,24 @@ impl From<MpdError> for ApiError {
         let status = match &error {
             MpdError::Unavailable | MpdError::ChannelClosed => StatusCode::SERVICE_UNAVAILABLE,
             MpdError::Command(_) => StatusCode::BAD_GATEWAY,
+        };
+        Self {
+            status,
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<LibraryError> for ApiError {
+    fn from(error: LibraryError) -> Self {
+        let status = match &error {
+            LibraryError::BadPath(_)
+            | LibraryError::NotDirectory(_)
+            | LibraryError::NotTrack(_)
+            | LibraryError::NoSupportedTracks(_)
+            | LibraryError::UnsupportedTrack(_) => StatusCode::BAD_REQUEST,
+            LibraryError::NotFound(_) => StatusCode::NOT_FOUND,
+            LibraryError::Io { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         };
         Self {
             status,
@@ -380,33 +375,6 @@ fn parse_field<'a>(output: &'a str, field: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn validate_queue_path_accepts_relative_music_paths() {
-        assert_eq!(
-            validate_queue_path("Air/Moon Safari/01 La femme d'argent.ogg".to_string())
-                .expect("valid path"),
-            "Air/Moon Safari/01 La femme d'argent.ogg"
-        );
-    }
-
-    #[test]
-    fn validate_queue_path_rejects_paths_outside_library() {
-        for path in [
-            "",
-            "/data/music/song.flac",
-            "../song.flac",
-            "Air/../song.flac",
-            "./song.flac",
-            "http://example.test/stream.mp3",
-            "file:///data/music/song.flac",
-        ] {
-            assert!(
-                validate_queue_path(path.to_string()).is_err(),
-                "expected {path:?} to be rejected"
-            );
-        }
-    }
 
     #[test]
     fn queue_item_target_prefers_stable_id() {

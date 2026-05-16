@@ -107,7 +107,7 @@ async function refreshLibrary() {
     const suffix = state.libraryPath
       ? `?path=${encodeURIComponent(state.libraryPath)}`
       : "";
-    state.library = await getJson(`/api/v1/library${suffix}`);
+    state.library = await getJson(`/api/v1/library/list${suffix}`);
     renderLibrary();
   } catch (error) {
     renderEmpty(el.libraryList, "Library unavailable");

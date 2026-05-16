@@ -1,7 +1,7 @@
 use std::{
     fs,
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result};
@@ -12,6 +12,7 @@ use serde::Deserialize;
 pub struct PlayerConfig {
     pub bind: SocketAddr,
     pub mpd_addr: SocketAddr,
+    pub music_root: PathBuf,
 }
 
 impl Default for PlayerConfig {
@@ -19,6 +20,7 @@ impl Default for PlayerConfig {
         Self {
             bind: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 8090),
             mpd_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6600),
+            music_root: PathBuf::from("/data/music"),
         }
     }
 }

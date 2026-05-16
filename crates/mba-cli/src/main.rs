@@ -47,7 +47,8 @@ enum Command {
         level: i32,
     },
     /// List a folder in the music library.
-    Library {
+    #[command(alias = "library")]
+    List {
         /// Library path relative to the music root. Empty for the root.
         #[arg(default_value = "")]
         path: String,
@@ -145,7 +146,7 @@ async fn main() -> Result<()> {
             )
             .await
         }
-        Command::Library { path } => list_library(&client, cli.server, path).await,
+        Command::List { path } => list_library(&client, cli.server, path).await,
         Command::Rescan => trigger_rescan(&client, cli.server).await,
         Command::Enqueue { path } => enqueue_path(&client, cli.server, "files", path).await,
         Command::EnqueueDir { path } => {
@@ -278,7 +279,7 @@ async fn post_action(
 }
 
 async fn list_library(client: &Client, server: Url, path: String) -> Result<()> {
-    let mut url = api_url(server, "/api/v1/library");
+    let mut url = api_url(server, "/api/v1/library/list");
     if !path.is_empty() {
         url.query_pairs_mut().append_pair("path", &path);
     }

@@ -1,9 +1,6 @@
 use std::{net::SocketAddr, time::Duration};
 
-use mba_protocol::{
-    basename, LibraryDirectory, LibraryListing, LibraryTrack, PlaybackInfo, PlaybackState,
-    QueueItem, QueueListing, TrackInfo,
-};
+use mba_protocol::{basename, PlaybackInfo, PlaybackState, QueueItem, QueueListing, TrackInfo};
 use mpd_client::{
     client::{ConnectionEvent, ConnectionEvents, Subsystem},
     commands,
@@ -75,12 +72,8 @@ enum Request {
     Rescan {
         reply: oneshot::Sender<Result<u64, MpdError>>,
     },
-    ListLibrary {
-        path: String,
-        reply: oneshot::Sender<Result<LibraryListing, MpdError>>,
-    },
     Enqueue {
-        path: String,
+        paths: Vec<String>,
         reply: oneshot::Sender<Result<(), MpdError>>,
     },
     ClearQueue {
@@ -98,9 +91,6 @@ impl Request {
                 let _ = reply.send(Err(error));
             }
             Request::Rescan { reply } => {
-                let _ = reply.send(Err(error));
-            }
-            Request::ListLibrary { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
             Request::Enqueue { reply, .. } | Request::ClearQueue { reply } => {
@@ -199,26 +189,17 @@ impl MpdHandle {
         rx.await.map_err(|_| MpdError::ChannelClosed)?
     }
 
-    pub async fn list_library(&self, path: String) -> Result<LibraryListing, MpdError> {
-        let (tx, rx) = oneshot::channel();
-        self.commands
-            .send(Request::ListLibrary { path, reply: tx })
-            .await
-            .map_err(|_| MpdError::ChannelClosed)?;
-        rx.await.map_err(|_| MpdError::ChannelClosed)?
-    }
-
     pub async fn enqueue(&self, path: String) -> Result<(), MpdError> {
+        self.enqueue_paths(vec![path]).await
+    }
+
+    pub async fn enqueue_paths(&self, paths: Vec<String>) -> Result<(), MpdError> {
         let (tx, rx) = oneshot::channel();
         self.commands
-            .send(Request::Enqueue { path, reply: tx })
+            .send(Request::Enqueue { paths, reply: tx })
             .await
             .map_err(|_| MpdError::ChannelClosed)?;
         rx.await.map_err(|_| MpdError::ChannelClosed)?
-    }
-
-    pub async fn enqueue_directory(&self, path: String) -> Result<(), MpdError> {
-        self.enqueue(path).await
     }
 
     pub async fn clear_queue(&self) -> Result<(), MpdError> {
@@ -374,8 +355,7 @@ async fn handle_request(client: &Client, request: Request) -> bool {
     match request {
         Request::Action { action, reply } => handle_action(client, action, reply).await,
         Request::Rescan { reply } => handle_rescan(client, reply).await,
-        Request::ListLibrary { path, reply } => handle_list_library(client, path, reply).await,
-        Request::Enqueue { path, reply } => handle_enqueue(client, path, reply).await,
+        Request::Enqueue { paths, reply } => handle_enqueue(client, paths, reply).await,
         Request::ClearQueue { reply } => handle_clear_queue(client, reply).await,
         Request::ListQueue { reply } => handle_list_queue(client, reply).await,
     }
@@ -562,69 +542,108 @@ async fn handle_rescan(client: &Client, reply: oneshot::Sender<Result<u64, MpdEr
     true
 }
 
-async fn handle_list_library(
-    client: &Client,
-    path: String,
-    reply: oneshot::Sender<Result<LibraryListing, MpdError>>,
-) -> bool {
-    let mut command = RawCommand::new("lsinfo");
-    if !path.is_empty() {
-        if let Err(error) = command.add_argument::<&str>(path.as_str()) {
-            let message = error.to_string();
-            warn!(%message, "lsinfo argument rejected");
-            let _ = reply.send(Err(MpdError::Command(message)));
-            return true;
-        }
-    }
-    match client.raw_command(command).await {
-        Ok(frame) => {
-            let listing = parse_listing(path, frame.fields());
-            let _ = reply.send(Ok(listing));
-        }
-        Err(error) => {
-            let message = error.to_string();
-            warn!(%message, "MPD lsinfo failed");
-            let _ = reply.send(Err(MpdError::Command(message)));
-        }
-    }
-    true
-}
-
 async fn handle_enqueue(
     client: &Client,
-    path: String,
+    paths: Vec<String>,
     reply: oneshot::Sender<Result<(), MpdError>>,
 ) -> bool {
-    match command_with_optional_arg("add", &path) {
-        Ok(command) => match enqueue_and_autoplay_if_empty(client, command).await {
-            Ok(()) => {
-                let _ = reply.send(Ok(()));
-            }
-            Err(message) => {
-                warn!(%message, "MPD add failed");
-                let _ = reply.send(Err(MpdError::Command(message)));
-            }
-        },
-        Err(error) => {
-            let message = error.to_string();
-            warn!(%message, "add argument rejected");
+    match enqueue_and_autoplay_if_empty(client, paths).await {
+        Ok(()) => {
+            let _ = reply.send(Ok(()));
+        }
+        Err(message) => {
+            warn!(%message, "MPD add failed");
             let _ = reply.send(Err(MpdError::Command(message)));
         }
     }
     true
 }
 
-async fn enqueue_and_autoplay_if_empty(client: &Client, command: RawCommand) -> Result<(), String> {
+async fn enqueue_and_autoplay_if_empty(client: &Client, paths: Vec<String>) -> Result<(), String> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+
+    let total_paths = paths.len();
     let before = client
         .command(commands::Status)
         .await
         .map_err(|e| e.to_string())?;
-    client
-        .raw_command(command)
-        .await
-        .map_err(|e| e.to_string())?;
 
-    if should_autoplay_after_enqueue(before.playlist_length, client).await? {
+    let mut added_count = 0;
+    for path in paths {
+        let command = match command_with_optional_arg("add", &path) {
+            Ok(command) => command,
+            Err(error) => {
+                return finish_enqueue_failure(
+                    client,
+                    before.playlist_length,
+                    total_paths,
+                    added_count,
+                    error,
+                )
+                .await;
+            }
+        };
+        if let Err(error) = client.raw_command(command).await {
+            return finish_enqueue_failure(
+                client,
+                before.playlist_length,
+                total_paths,
+                added_count,
+                error.to_string(),
+            )
+            .await;
+        }
+        added_count += 1;
+    }
+
+    if let Err(error) =
+        autoplay_after_enqueue_if_needed(before.playlist_length, added_count, client).await
+    {
+        return Err(post_enqueue_reconciliation_failure(
+            total_paths,
+            added_count,
+            &error,
+        ));
+    }
+
+    Ok(())
+}
+
+async fn finish_enqueue_failure(
+    client: &Client,
+    previous_queue_length: usize,
+    total_paths: usize,
+    added_count: usize,
+    error: String,
+) -> Result<(), String> {
+    if added_count == 0 {
+        return Err(error);
+    }
+
+    let autoplay_error =
+        autoplay_after_enqueue_if_needed(previous_queue_length, added_count, client)
+            .await
+            .err();
+    Err(partial_enqueue_failure(
+        total_paths,
+        added_count,
+        &error,
+        autoplay_error.as_deref(),
+    ))
+}
+
+async fn autoplay_after_enqueue_if_needed(
+    previous_queue_length: usize,
+    added_count: usize,
+    client: &Client,
+) -> Result<(), String> {
+    if added_count == 0 {
+        return Ok(());
+    }
+
+    if should_autoplay_after_enqueue(previous_queue_length, client).await? {
         client
             .command(commands::Play::current())
             .await
@@ -632,6 +651,32 @@ async fn enqueue_and_autoplay_if_empty(client: &Client, command: RawCommand) -> 
     }
 
     Ok(())
+}
+
+fn partial_enqueue_failure(
+    total_paths: usize,
+    added_count: usize,
+    error: &str,
+    autoplay_error: Option<&str>,
+) -> String {
+    let mut message = format!(
+        "MPD rejected directory enqueue after adding {added_count} of {total_paths} tracks; queue may be partially updated: {error}"
+    );
+    if let Some(autoplay_error) = autoplay_error {
+        message.push_str("; playback reconciliation also failed: ");
+        message.push_str(autoplay_error);
+    }
+    message
+}
+
+fn post_enqueue_reconciliation_failure(
+    total_paths: usize,
+    added_count: usize,
+    error: &str,
+) -> String {
+    format!(
+        "MPD accepted {added_count} of {total_paths} queued tracks, but playback reconciliation failed: {error}"
+    )
 }
 
 async fn should_autoplay_after_enqueue(
@@ -867,165 +912,9 @@ where
     QueueListing { items }
 }
 
-struct PendingTrack {
-    uri: String,
-    title: Option<String>,
-    artist: Option<String>,
-    album: Option<String>,
-    duration_s: Option<u32>,
-}
-
-impl PendingTrack {
-    fn new(uri: String) -> Self {
-        Self {
-            uri,
-            title: None,
-            artist: None,
-            album: None,
-            duration_s: None,
-        }
-    }
-
-    fn into_track(self) -> LibraryTrack {
-        LibraryTrack {
-            name: basename(&self.uri).to_string(),
-            uri: self.uri,
-            title: self.title,
-            artist: self.artist,
-            album: self.album,
-            duration_s: self.duration_s,
-        }
-    }
-}
-
-fn parse_listing<'a, I>(path: String, fields: I) -> LibraryListing
-where
-    I: IntoIterator<Item = (&'a str, &'a str)>,
-{
-    let mut directories = Vec::new();
-    let mut tracks = Vec::new();
-    let mut pending: Option<PendingTrack> = None;
-    let mut in_playlist = false;
-
-    for (key, value) in fields {
-        match key {
-            "directory" => {
-                if let Some(track) = pending.take() {
-                    tracks.push(track.into_track());
-                }
-                in_playlist = false;
-                directories.push(LibraryDirectory {
-                    name: basename(value).to_string(),
-                    path: value.to_string(),
-                });
-            }
-            "file" => {
-                if let Some(track) = pending.take() {
-                    tracks.push(track.into_track());
-                }
-                in_playlist = false;
-                pending = Some(PendingTrack::new(value.to_string()));
-            }
-            "playlist" => {
-                if let Some(track) = pending.take() {
-                    tracks.push(track.into_track());
-                }
-                in_playlist = true;
-            }
-            "Title" => {
-                if let Some(track) = pending.as_mut() {
-                    track.title = Some(value.to_string());
-                }
-            }
-            "Artist" => {
-                if let Some(track) = pending.as_mut() {
-                    track.artist = Some(value.to_string());
-                }
-            }
-            "Album" => {
-                if let Some(track) = pending.as_mut() {
-                    track.album = Some(value.to_string());
-                }
-            }
-            "Time" | "duration" => {
-                if let Some(track) = pending.as_mut() {
-                    if let Ok(secs) = value.parse::<f64>() {
-                        track.duration_s = Some(secs.round().max(0.0) as u32);
-                    }
-                }
-            }
-            _ => {
-                let _ = in_playlist;
-            }
-        }
-    }
-    if let Some(track) = pending.take() {
-        tracks.push(track.into_track());
-    }
-
-    LibraryListing {
-        path,
-        directories,
-        tracks,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parse_listing_empty_returns_empty_listing() {
-        let listing = parse_listing(String::new(), [].iter().copied());
-        assert_eq!(listing.path, "");
-        assert!(listing.directories.is_empty());
-        assert!(listing.tracks.is_empty());
-    }
-
-    #[test]
-    fn parse_listing_groups_directories_and_files() {
-        let fields: &[(&str, &str)] = &[
-            ("directory", "Pink Floyd"),
-            ("Last-Modified", "2024-01-01T00:00:00Z"),
-            ("directory", "Radiohead"),
-            ("Last-Modified", "2024-01-02T00:00:00Z"),
-            ("file", "single.flac"),
-            ("Title", "Single"),
-            ("Artist", "Various"),
-            ("Album", "Mixtape"),
-            ("Time", "214"),
-            ("duration", "213.876"),
-            ("playlist", "legacy.m3u"),
-            ("Last-Modified", "2024-02-01T00:00:00Z"),
-        ];
-        let listing = parse_listing(String::new(), fields.iter().copied());
-
-        assert_eq!(listing.directories.len(), 2);
-        assert_eq!(listing.directories[0].name, "Pink Floyd");
-        assert_eq!(listing.directories[0].path, "Pink Floyd");
-        assert_eq!(listing.directories[1].name, "Radiohead");
-
-        assert_eq!(listing.tracks.len(), 1);
-        let track = &listing.tracks[0];
-        assert_eq!(track.uri, "single.flac");
-        assert_eq!(track.name, "single.flac");
-        assert_eq!(track.title.as_deref(), Some("Single"));
-        assert_eq!(track.artist.as_deref(), Some("Various"));
-        assert_eq!(track.album.as_deref(), Some("Mixtape"));
-        assert_eq!(track.duration_s, Some(214));
-    }
-
-    #[test]
-    fn parse_listing_uses_basename_for_nested_files() {
-        let fields: &[(&str, &str)] = &[
-            ("file", "Pink Floyd/Dark Side/01 Speak to Me.flac"),
-            ("Title", "Speak to Me"),
-        ];
-        let listing = parse_listing("Pink Floyd/Dark Side".to_string(), fields.iter().copied());
-        let track = &listing.tracks[0];
-        assert_eq!(track.uri, "Pink Floyd/Dark Side/01 Speak to Me.flac");
-        assert_eq!(track.name, "01 Speak to Me.flac");
-    }
 
     #[test]
     fn parse_queue_groups_playlistinfo_items() {
@@ -1077,6 +966,36 @@ mod tests {
         assert!(!queue_transition_should_autoplay(0, 0));
         assert!(!queue_transition_should_autoplay(1, 2));
         assert!(!queue_transition_should_autoplay(3, 3));
+    }
+
+    #[test]
+    fn partial_enqueue_failure_reports_partial_queue_state() {
+        let message = partial_enqueue_failure(4, 2, "bad file", None);
+
+        assert_eq!(
+            message,
+            "MPD rejected directory enqueue after adding 2 of 4 tracks; queue may be partially updated: bad file"
+        );
+    }
+
+    #[test]
+    fn partial_enqueue_failure_includes_reconciliation_failure() {
+        let message = partial_enqueue_failure(3, 1, "bad file", Some("status failed"));
+
+        assert_eq!(
+            message,
+            "MPD rejected directory enqueue after adding 1 of 3 tracks; queue may be partially updated: bad file; playback reconciliation also failed: status failed"
+        );
+    }
+
+    #[test]
+    fn post_enqueue_reconciliation_failure_reports_accepted_tracks() {
+        let message = post_enqueue_reconciliation_failure(3, 3, "play failed");
+
+        assert_eq!(
+            message,
+            "MPD accepted 3 of 3 queued tracks, but playback reconciliation failed: play failed"
+        );
     }
 
     #[test]
