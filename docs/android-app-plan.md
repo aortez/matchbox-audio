@@ -202,10 +202,10 @@ Exit criteria:
 - [ ] Verify oversized response rejection or pagination behavior.
 - [x] Add service logging for connection, disconnect, and protocol errors.
 - [x] Add `mba-cli bt status`.
-- [ ] Add `mba-cli bt pairing start --timeout <seconds>`.
-- [ ] Add `mba-cli bt pairing stop`.
-- [ ] Add `mba-cli bt clients`.
-- [ ] Add `mba-cli bt forget <client>`.
+- [x] Add `mba-cli bt pairing start --timeout <seconds>`.
+- [x] Add `mba-cli bt pairing stop`.
+- [x] Add `mba-cli bt clients`.
+- [x] Add `mba-cli bt forget <client>`.
 
 Phase 3 first-slice status:
 
@@ -256,6 +256,35 @@ Phase 3 CLI status status:
   `mba-bt.service` through systemd's runtime directory support. Local developer
   runs can still use `--control-socket /tmp/mba-bt/control.sock`.
 
+Phase 3 pairing-mode status:
+
+- `mba-cli bt pairing start --timeout <seconds>` sends `bt.pairing.start` over
+  the local admin socket and opens an in-memory pairing window.
+- `mba-cli bt pairing stop` sends `bt.pairing.stop` and closes the window.
+- `mba-cli bt status` and the BLE Status characteristic report
+  `pairing_state` as `closed` or `open`; when open they also report
+  `pairing_remaining_seconds`.
+- Pairing mode is runtime-only. If `mba-bt` restarts, pairing closes. Trusted
+  clients will be persisted separately under `/data/matchbox-audio/bt`.
+- Validated on May 16, 2026 PDT against `matchbox-audio.local` after deploying
+  to A/B slot `b`: `pairing start --timeout 120` reported `open`,
+  `pairing stop` reported `closed`, invalid timeout `0` was rejected, and a
+  one-second pairing window expired back to `closed`.
+
+Phase 3 client-management status:
+
+- `mba-cli bt clients` sends `bt.clients` over the local admin socket and
+  lists trusted-client records from `/data/matchbox-audio/bt/clients/*.json`.
+- `mba-cli bt forget <client>` sends `bt.client.forget` and removes one client
+  record by ID.
+- Client IDs are constrained to a filename-safe ASCII subset so the admin
+  method cannot traverse out of the client-record directory.
+- This is management plumbing only. The Android pairing handshake that creates
+  the first real client record is still deferred.
+- Validated on May 16, 2026 PDT against `matchbox-audio.local` after deploying
+  to A/B slot `a`: `mba-cli bt clients` reported no trusted clients and
+  `mba-cli bt forget missing-client` returned a structured `not_found` error.
+
 Exit criteria:
 
 - A real Android phone can connect to the Pi over BLE GATT.
@@ -267,7 +296,7 @@ Exit criteria:
 
 - [x] Add `mba-bt.service`.
 - [x] Add service hardening appropriate for BlueZ GATT/advertising access.
-- [ ] Add persistent state directory under `/data/matchbox-audio/bt`.
+- [x] Add persistent state directory under `/data/matchbox-audio/bt`.
 - [x] Add Yocto install rules for `mba-bt`.
 - [ ] Include any required BlueZ config or policy.
 - [ ] Add remote smoke-test checks for:
@@ -283,6 +312,20 @@ Exit criteria:
 - The target image boots with `mba-bt.service` available.
 - Bluetooth control state survives reboot and remote update.
 - `mba-player` remains isolated from direct Bluetooth permissions.
+
+Phase 4 persistent BT state status:
+
+- `mba-data-init` creates `/data/matchbox-audio/bt` and
+  `/data/matchbox-audio/bt/clients` as `root:root 0700`.
+- `mba-bt.service` starts `mba-bt` with
+  `--state-dir /data/matchbox-audio/bt` and allows writes to that path.
+- `mba-bt` initializes `state.json` and counts `clients/*.json` records for
+  status. Actual client record creation is deferred to the pairing handshake.
+- Validated on May 16, 2026 PDT against `matchbox-audio.local` after
+  `./update.sh --smoke`: the packaged service was active, status reported
+  `state_dir: /data/matchbox-audio/bt`, `/data/matchbox-audio/bt` was
+  `root:root 0700`, Android BLE smoke still completed `system.hello` and
+  `system.snapshot`, and `npm run hardening` passed.
 
 ## Phase 5: Android Project Skeleton
 

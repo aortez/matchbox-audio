@@ -3,8 +3,9 @@ use std::{io::Write as _, path::PathBuf};
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use mba_protocol::{
-    BtControlRequest, BtControlResponse, BtStatus, LibraryListing, QueueListing, RescanResponse,
-    StatusResponse, DEFAULT_BT_CONTROL_SOCKET,
+    BtClientRecord, BtControlRequest, BtControlResponse, BtStatus, LibraryListing, QueueListing,
+    RescanResponse, StatusResponse, DEFAULT_BT_CONTROL_SOCKET, DEFAULT_BT_PAIRING_TIMEOUT_SECONDS,
+    MAX_BT_PAIRING_TIMEOUT_SECONDS,
 };
 use reqwest::{Client, Method, Url};
 use tokio::{
@@ -127,6 +128,30 @@ enum Command {
 enum BtCommand {
     /// Show local Bluetooth daemon status.
     Status,
+    /// List trusted Bluetooth app clients.
+    Clients,
+    /// Forget one trusted Bluetooth app client.
+    Forget {
+        /// Client id from `mba-cli bt clients`.
+        client_id: String,
+    },
+    /// Open or close the local Bluetooth pairing window.
+    Pairing {
+        #[command(subcommand)]
+        command: BtPairingCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum BtPairingCommand {
+    /// Temporarily allow a new app client to pair.
+    Start {
+        /// Pairing window length in seconds.
+        #[arg(long, default_value_t = DEFAULT_BT_PAIRING_TIMEOUT_SECONDS)]
+        timeout: u64,
+    },
+    /// Close the current pairing window.
+    Stop,
 }
 
 #[tokio::main]
@@ -189,15 +214,69 @@ async fn main() -> Result<()> {
         Command::Screenshot { output, socket } => capture_screenshot(socket, output).await,
         Command::Bt { socket, command } => match command {
             BtCommand::Status => show_bt_status(socket).await,
+            BtCommand::Clients => show_bt_clients(socket).await,
+            BtCommand::Forget { client_id } => forget_bt_client(socket, client_id).await,
+            BtCommand::Pairing { command } => match command {
+                BtPairingCommand::Start { timeout } => start_bt_pairing(socket, timeout).await,
+                BtPairingCommand::Stop => stop_bt_pairing(socket).await,
+            },
         },
     }
 }
 
 async fn show_bt_status(socket: PathBuf) -> Result<()> {
     let response = send_bt_control_request(&socket, &BtControlRequest::status()).await?;
-    let status = bt_response_status(response)?;
+    let status = bt_response_status("bt status", response)?;
 
     print!("{}", format_bt_status(&status));
+    Ok(())
+}
+
+async fn start_bt_pairing(socket: PathBuf, timeout: u64) -> Result<()> {
+    validate_bt_pairing_timeout(timeout)?;
+    let request = BtControlRequest::pairing_start(timeout);
+    let response = send_bt_control_request(&socket, &request).await?;
+    let status = bt_response_status("bt pairing start", response)?;
+
+    print!("{}", format_bt_status(&status));
+    Ok(())
+}
+
+async fn stop_bt_pairing(socket: PathBuf) -> Result<()> {
+    let response = send_bt_control_request(&socket, &BtControlRequest::pairing_stop()).await?;
+    let status = bt_response_status("bt pairing stop", response)?;
+
+    print!("{}", format_bt_status(&status));
+    Ok(())
+}
+
+async fn show_bt_clients(socket: PathBuf) -> Result<()> {
+    let response = send_bt_control_request(&socket, &BtControlRequest::clients()).await?;
+    let clients = bt_response_clients("bt clients", response)?;
+
+    print!("{}", format_bt_clients(&clients));
+    Ok(())
+}
+
+async fn forget_bt_client(socket: PathBuf, client_id: String) -> Result<()> {
+    if client_id.trim().is_empty() {
+        return Err(anyhow!("client_id must not be empty"));
+    }
+    let request = BtControlRequest::forget_client(&client_id);
+    let response = send_bt_control_request(&socket, &request).await?;
+    let status = bt_response_status("bt forget", response)?;
+
+    println!("forgot_client: {client_id}");
+    print!("{}", format_bt_status(&status));
+    Ok(())
+}
+
+fn validate_bt_pairing_timeout(timeout: u64) -> Result<()> {
+    if !(1..=MAX_BT_PAIRING_TIMEOUT_SECONDS).contains(&timeout) {
+        return Err(anyhow!(
+            "timeout must be between 1 and {MAX_BT_PAIRING_TIMEOUT_SECONDS} seconds"
+        ));
+    }
     Ok(())
 }
 
@@ -230,18 +309,35 @@ async fn send_bt_control_request(
         .with_context(|| format!("failed to decode bt response from {}", socket.display()))
 }
 
-fn bt_response_status(response: BtControlResponse) -> Result<BtStatus> {
+fn bt_response_status(action: &str, response: BtControlResponse) -> Result<BtStatus> {
     if response.ok {
         return response
             .status
-            .ok_or_else(|| anyhow!("bt status response was missing status payload"));
+            .ok_or_else(|| anyhow!("{action} response was missing status payload"));
     }
 
     let error = response
         .error
-        .ok_or_else(|| anyhow!("bt status failed without an error payload"))?;
+        .ok_or_else(|| anyhow!("{action} failed without an error payload"))?;
     Err(anyhow!(
-        "bt status failed: {}: {}",
+        "{action} failed: {}: {}",
+        error.code,
+        error.message
+    ))
+}
+
+fn bt_response_clients(action: &str, response: BtControlResponse) -> Result<Vec<BtClientRecord>> {
+    if response.ok {
+        return response
+            .clients
+            .ok_or_else(|| anyhow!("{action} response was missing clients payload"));
+    }
+
+    let error = response
+        .error
+        .ok_or_else(|| anyhow!("{action} failed without an error payload"))?;
+    Err(anyhow!(
+        "{action} failed: {}: {}",
         error.code,
         error.message
     ))
@@ -252,6 +348,10 @@ fn format_bt_status(status: &BtStatus) -> String {
     output.push_str(&format!("service: {}\n", status.service));
     output.push_str(&format!("transport: {}\n", status.transport));
     output.push_str(&format!("device_name: {}\n", status.device_name));
+    if let Some(state_dir) = &status.state_dir {
+        output.push_str(&format!("state_dir: {state_dir}\n"));
+    }
+    output.push_str(&format!("trusted_clients: {}\n", status.trusted_clients));
     if let Some(adapter) = &status.adapter {
         output.push_str(&format!("adapter: {}\n", adapter.name));
         output.push_str(&format!("adapter_address: {}\n", adapter.address));
@@ -259,6 +359,9 @@ fn format_bt_status(status: &BtStatus) -> String {
     output.push_str(&format!("advertising: {}\n", status.advertising));
     output.push_str(&format!("service_uuid: {}\n", status.service_uuid));
     output.push_str(&format!("pairing_state: {}\n", status.pairing_state));
+    if let Some(remaining_seconds) = status.pairing_remaining_seconds {
+        output.push_str(&format!("pairing_remaining_seconds: {remaining_seconds}\n"));
+    }
     output.push_str(&format!("busy: {}\n", status.busy));
     if let Some(client) = &status.active_client {
         output.push_str(&format!("active_client_address: {}\n", client.address));
@@ -271,6 +374,40 @@ fn format_bt_status(status: &BtStatus) -> String {
     }
     output.push_str(&format!("rx_chunk_writes: {}\n", status.rx_chunk_writes));
     output.push_str(&format!("tx_chunks_sent: {}\n", status.tx_chunks_sent));
+    output
+}
+
+fn format_bt_clients(clients: &[BtClientRecord]) -> String {
+    if clients.is_empty() {
+        return "(no trusted clients)\n".to_string();
+    }
+
+    let mut output = String::new();
+    for (index, client) in clients.iter().enumerate() {
+        if index > 0 {
+            output.push('\n');
+        }
+        output.push_str(&format!("client_id: {}\n", client.client_id));
+        if let Some(display_name) = &client.display_name {
+            output.push_str(&format!("display_name: {display_name}\n"));
+        }
+        output.push_str(&format!("trusted: {}\n", client.trusted));
+        output.push_str(&format!(
+            "created_unix_seconds: {}\n",
+            client.created_unix_seconds
+        ));
+        if let Some(last_seen_unix_seconds) = client.last_seen_unix_seconds {
+            output.push_str(&format!(
+                "last_seen_unix_seconds: {last_seen_unix_seconds}\n"
+            ));
+        }
+        if let Some(last_ble_address) = &client.last_ble_address {
+            output.push_str(&format!("last_ble_address: {last_ble_address}\n"));
+        }
+        if let Some(protocol_version) = client.protocol_version {
+            output.push_str(&format!("protocol_version: {protocol_version}\n"));
+        }
+    }
     output
 }
 
@@ -656,13 +793,16 @@ mod tests {
             service: "matchbox-audio".to_string(),
             transport: "mba-bt-ble-local".to_string(),
             device_name: "Matchbox Audio".to_string(),
+            state_dir: Some("/data/matchbox-audio/bt".to_string()),
+            trusted_clients: 0,
             adapter: Some(mba_protocol::BtAdapterStatus {
                 name: "hci0".to_string(),
                 address: "88:A2:9E:B1:87:91".to_string(),
             }),
             advertising: true,
             service_uuid: "1cef04f1-966e-43ad-860f-086db4f277d6".to_string(),
-            pairing_state: "local".to_string(),
+            pairing_state: "open".to_string(),
+            pairing_remaining_seconds: Some(120),
             busy: true,
             active_client: Some(mba_protocol::BtActiveClientStatus {
                 address: "6A:2E:A9:9C:0A:81".to_string(),
@@ -677,7 +817,11 @@ mod tests {
         let output = format_bt_status(&status);
 
         assert!(output.contains("service: matchbox-audio\n"));
+        assert!(output.contains("state_dir: /data/matchbox-audio/bt\n"));
+        assert!(output.contains("trusted_clients: 0\n"));
         assert!(output.contains("adapter_address: 88:A2:9E:B1:87:91\n"));
+        assert!(output.contains("pairing_state: open\n"));
+        assert!(output.contains("pairing_remaining_seconds: 120\n"));
         assert!(output.contains("busy: true\n"));
         assert!(output.contains("active_client_mtu: 512\n"));
         assert!(output.contains("tx_chunks_sent: 6\n"));
@@ -685,9 +829,56 @@ mod tests {
 
     #[test]
     fn bt_response_status_surfaces_error_payload() {
-        let error = bt_response_status(BtControlResponse::error("bad_request", "nope"))
+        let error = bt_response_status(
+            "bt pairing start",
+            BtControlResponse::error("bad_request", "nope"),
+        )
+        .expect_err("error response fails");
+
+        assert!(error
+            .to_string()
+            .contains("bt pairing start failed: bad_request: nope"));
+    }
+
+    #[test]
+    fn format_bt_clients_handles_empty_and_known_clients() {
+        assert_eq!(format_bt_clients(&[]), "(no trusted clients)\n");
+
+        let clients = vec![BtClientRecord {
+            schema_version: 1,
+            client_id: "phone-1".to_string(),
+            display_name: Some("Pixel 7 Pro".to_string()),
+            trusted: true,
+            created_unix_seconds: 1_765_000_000,
+            last_seen_unix_seconds: Some(1_765_000_120),
+            last_ble_address: Some("57:29:36:B6:FD:53".to_string()),
+            protocol_version: Some(1),
+        }];
+
+        let output = format_bt_clients(&clients);
+
+        assert!(output.contains("client_id: phone-1\n"));
+        assert!(output.contains("display_name: Pixel 7 Pro\n"));
+        assert!(output.contains("trusted: true\n"));
+        assert!(output.contains("last_ble_address: 57:29:36:B6:FD:53\n"));
+        assert!(output.contains("protocol_version: 1\n"));
+    }
+
+    #[test]
+    fn bt_response_clients_surfaces_error_payload() {
+        let error = bt_response_clients("bt clients", BtControlResponse::error("internal", "nope"))
             .expect_err("error response fails");
 
-        assert!(error.to_string().contains("bad_request: nope"));
+        assert!(error
+            .to_string()
+            .contains("bt clients failed: internal: nope"));
+    }
+
+    #[test]
+    fn validate_bt_pairing_timeout_bounds() {
+        assert!(validate_bt_pairing_timeout(1).is_ok());
+        assert!(validate_bt_pairing_timeout(MAX_BT_PAIRING_TIMEOUT_SECONDS).is_ok());
+        assert!(validate_bt_pairing_timeout(0).is_err());
+        assert!(validate_bt_pairing_timeout(MAX_BT_PAIRING_TIMEOUT_SECONDS + 1).is_err());
     }
 }

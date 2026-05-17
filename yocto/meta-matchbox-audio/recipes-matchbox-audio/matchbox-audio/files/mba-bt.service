@@ -8,7 +8,7 @@ Type=simple
 User=root
 Group=matchbox
 Environment=RUST_LOG=mba_bt=info,warn
-ExecStart=/usr/bin/mba-bt --ble-local --control-socket /run/mba-bt/control.sock
+ExecStart=/usr/bin/mba-bt --ble-local --control-socket /run/mba-bt/control.sock --state-dir /data/matchbox-audio/bt
 Restart=on-failure
 RestartSec=2
 RuntimeDirectory=mba-bt
@@ -21,6 +21,7 @@ ProtectSystem=full
 ProtectControlGroups=yes
 ProtectKernelModules=yes
 ProtectKernelTunables=yes
+ReadWritePaths=/data/matchbox-audio/bt
 RestrictAddressFamilies=AF_UNIX
 RestrictSUIDSGID=yes
 

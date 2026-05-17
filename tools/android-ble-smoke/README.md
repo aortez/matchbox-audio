@@ -38,6 +38,13 @@ While `mba-bt --ble-local` is running, local daemon state can be inspected with:
 cargo run -p mba-cli -- bt --socket /tmp/mba-bt/control.sock status
 ```
 
+The pairing window can be opened and closed over the same local admin socket:
+
+```sh
+cargo run -p mba-cli -- bt --socket /tmp/mba-bt/control.sock pairing start --timeout 120
+cargo run -p mba-cli -- bt --socket /tmp/mba-bt/control.sock pairing stop
+```
+
 For the Matchbox target image, use the cross-build and SSH commands documented
 in `../ble-gatt-spike/README.md`.
 

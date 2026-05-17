@@ -8,6 +8,8 @@ MUSIC_DIR=/data/music
 APP_STATE_DIR="$APP_DIR/state"
 NETWORK_DIR="$APP_DIR/network"
 UPDATE_DIR="$APP_DIR/update"
+BT_DIR="$APP_DIR/bt"
+BT_CLIENTS_DIR="$BT_DIR/clients"
 MPD_DIR=/data/mpd
 MPD_PLAYLISTS_DIR="$MPD_DIR/playlists"
 
@@ -48,6 +50,8 @@ ensure_dir "$APP_DIR" root root 0711
 ensure_dir "$APP_STATE_DIR" mba-player matchbox-audio 0750
 ensure_dir "$NETWORK_DIR" root matchbox-audio 0750
 ensure_dir "$UPDATE_DIR" matchbox matchbox 0750
+ensure_dir "$BT_DIR" root root 0700
+ensure_dir "$BT_CLIENTS_DIR" root root 0700
 ensure_dir "$MUSIC_DIR" matchbox matchbox 0755
 ensure_dir "$MPD_DIR" mpd mpd 0750
 ensure_dir "$MPD_PLAYLISTS_DIR" mpd mpd 0750

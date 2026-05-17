@@ -203,6 +203,7 @@ function main() {
   expectRemoteValue(remoteTarget, 'app state directory mode', 'stat -c %U:%G:%a /data/matchbox-audio/state', 'mba-player:matchbox-audio:750');
   expectRemoteValue(remoteTarget, 'network data directory mode', 'stat -c %U:%G:%a /data/matchbox-audio/network', 'root:matchbox-audio:750');
   expectRemoteValue(remoteTarget, 'update directory mode', 'stat -c %U:%G:%a /data/matchbox-audio/update', 'matchbox:matchbox:750');
+  expectRemoteValue(remoteTarget, 'bt data directory mode', 'stat -c %U:%G:%a /data/matchbox-audio/bt', 'root:root:700');
   expectRemoteValue(remoteTarget, 'music directory mode', 'stat -c %U:%G:%a /data/music', 'matchbox:matchbox:755');
   expectRemoteValue(remoteTarget, 'mpd directory mode', 'stat -c %U:%G:%a /data/mpd', 'mpd:mpd:750');
   // The 0750 mode on /data/mpd intentionally hides everything inside from

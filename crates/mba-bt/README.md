@@ -54,6 +54,11 @@ characteristic. That gives `mba-bt` a response path. A second subscriber gets a
 structured `busy` response when possible, and RX writes from inactive Bluetooth
 addresses are rejected.
 
+BLE-local opens a persistent state store before registering with BlueZ. The
+packaged service uses `/data/matchbox-audio/bt`; local developer runs can pass
+`--state-dir /tmp/mba-bt/state` or `--no-state-dir`. The store currently creates
+`state.json` and a `clients/` directory for the later trusted-client records.
+
 BLE-local also serves a local admin socket for CLI inspection:
 
 ```sh
@@ -65,3 +70,21 @@ use `--control-socket /tmp/mba-bt/control.sock` on `mba-bt` and
 `--socket /tmp/mba-bt/control.sock` on `mba-cli`. Use `--no-control-socket` to
 disable the socket. It reports adapter, advertising, pairing, busy,
 active-client, and RX/TX counter state without going through BLE.
+
+The same socket controls the runtime pairing window:
+
+```sh
+cargo run -p mba-cli -- bt --socket /tmp/mba-bt/control.sock pairing start --timeout 120
+cargo run -p mba-cli -- bt --socket /tmp/mba-bt/control.sock pairing stop
+```
+
+Trusted-client records can be inspected and removed over the same socket:
+
+```sh
+cargo run -p mba-cli -- bt --socket /tmp/mba-bt/control.sock clients
+cargo run -p mba-cli -- bt --socket /tmp/mba-bt/control.sock forget <client-id>
+```
+
+Pairing mode is intentionally not persisted. Rebooting `mba-bt` closes the
+window, but trusted-client records added by later phases will live in the state
+store.

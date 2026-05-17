@@ -9,7 +9,9 @@ use mba_bt::{
     encode_frame, run_ble_gatt, BleGattOptions, FakePlayerBackend, FrameDecoder, RequestRouter,
     RouteOutput,
 };
-use mba_protocol::{ErrorCode, ProtocolError, ProtocolMessage, DEFAULT_BT_CONTROL_SOCKET};
+use mba_protocol::{
+    ErrorCode, ProtocolError, ProtocolMessage, DEFAULT_BT_CONTROL_SOCKET, DEFAULT_BT_STATE_DIR,
+};
 
 #[derive(Debug, Parser)]
 #[command(about = "Local Matchbox Bluetooth protocol exerciser")]
@@ -29,6 +31,14 @@ struct Args {
     control_socket: PathBuf,
     #[arg(long, help = "Disable the local mba-bt control socket")]
     no_control_socket: bool,
+    #[arg(
+        long,
+        default_value = DEFAULT_BT_STATE_DIR,
+        help = "Persistent Bluetooth trust/state directory in BLE-local mode"
+    )]
+    state_dir: PathBuf,
+    #[arg(long, help = "Disable persistent Bluetooth state directory setup")]
+    no_state_dir: bool,
 }
 
 #[tokio::main]
@@ -53,6 +63,11 @@ async fn main() -> anyhow::Result<()> {
             None
         } else {
             Some(args.control_socket)
+        };
+        options.state_dir = if args.no_state_dir {
+            None
+        } else {
+            Some(args.state_dir)
         };
         return run_ble_gatt(router, options).await;
     }

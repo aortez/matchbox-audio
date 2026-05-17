@@ -5,6 +5,7 @@ pub mod gatt;
 pub mod player;
 pub mod router;
 pub mod session;
+pub mod state;
 
 pub use ble_transport::*;
 pub use control::*;
@@ -13,6 +14,7 @@ pub use gatt::*;
 pub use player::*;
 pub use router::*;
 pub use session::*;
+pub use state::*;
 
 #[cfg(test)]
 mod tests {

@@ -1,4 +1,8 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::Context;
 use bluer::{
@@ -16,9 +20,12 @@ use bluer::{
 use futures_util::{FutureExt, StreamExt};
 use mba_protocol::{
     ble, BtActiveClientStatus, BtAdapterStatus, BtControlRequest, BtControlResponse, BtStatus,
-    ErrorCode, ProtocolError, ProtocolMessage, APP_PROTOCOL_VERSION, BT_CONTROL_METHOD_STATUS,
-    DEFAULT_BT_CONTROL_SOCKET, DEFAULT_PAGE_LIMIT, DEVICE_DISPLAY_NAME, MAX_MESSAGE_BYTES,
-    MAX_PAGE_LIMIT, SERVICE_NAME, TARGET_RESPONSE_BYTES,
+    ErrorCode, ProtocolError, ProtocolMessage, APP_PROTOCOL_VERSION, BT_CONTROL_METHOD_CLIENTS,
+    BT_CONTROL_METHOD_FORGET_CLIENT, BT_CONTROL_METHOD_PAIRING_START,
+    BT_CONTROL_METHOD_PAIRING_STOP, BT_CONTROL_METHOD_STATUS, DEFAULT_BT_CONTROL_SOCKET,
+    DEFAULT_BT_PAIRING_TIMEOUT_SECONDS, DEFAULT_BT_STATE_DIR, DEFAULT_PAGE_LIMIT,
+    DEVICE_DISPLAY_NAME, MAX_BT_PAIRING_TIMEOUT_SECONDS, MAX_MESSAGE_BYTES, MAX_PAGE_LIMIT,
+    SERVICE_NAME, TARGET_RESPONSE_BYTES,
 };
 use serde_json::json;
 use tokio::sync::{mpsc, RwLock};
@@ -28,7 +35,7 @@ use crate::{
     bad_request_for_transport_error, ActiveSession, BleTransportError, InMemoryBleTransport,
     PlayerBackend, RequestRouter, SessionGate,
 };
-use crate::{start_control_socket, ControlHandler};
+use crate::{start_control_socket, BtStateStore, ControlHandler};
 
 const SERVICE_UUID: Uuid = Uuid::from_u128(0x1cef04f1_966e_43ad_860f_086db4f277d6);
 const STATUS_UUID: Uuid = Uuid::from_u128(0xbd539314_4637_416b_a3b5_804fecd5b792);
@@ -38,16 +45,16 @@ const TX_UUID: Uuid = Uuid::from_u128(0xfcc9055c_34e3_46d9_a010_bd8a4f180b0c);
 #[derive(Debug, Clone)]
 pub struct BleGattOptions {
     pub device_name: String,
-    pub pairing_state: String,
     pub control_socket: Option<PathBuf>,
+    pub state_dir: Option<PathBuf>,
 }
 
 impl Default for BleGattOptions {
     fn default() -> Self {
         Self {
             device_name: DEVICE_DISPLAY_NAME.to_string(),
-            pairing_state: "local".to_string(),
             control_socket: Some(DEFAULT_BT_CONTROL_SOCKET.into()),
+            state_dir: Some(DEFAULT_BT_STATE_DIR.into()),
         }
     }
 }
@@ -57,6 +64,8 @@ struct BleGattState<P> {
     session_gate: SessionGate,
     transport: InMemoryBleTransport,
     active_session: Option<BleActiveSession>,
+    state_store: Option<BtStateStore>,
+    pairing_expires_at: Option<Instant>,
     next_session_token: u64,
     rx_count: u64,
     tx_sent_count: u64,
@@ -66,12 +75,14 @@ impl<P> BleGattState<P>
 where
     P: PlayerBackend,
 {
-    fn new(router: RequestRouter<P>) -> Self {
+    fn new(router: RequestRouter<P>, state_store: Option<BtStateStore>) -> Self {
         Self {
             router,
             session_gate: SessionGate::new(),
             transport: InMemoryBleTransport::new(),
             active_session: None,
+            state_store,
+            pairing_expires_at: None,
             next_session_token: 1,
             rx_count: 0,
             tx_sent_count: 0,
@@ -85,8 +96,66 @@ where
                 .active_session
                 .as_ref()
                 .map(BleActiveClientSnapshot::from),
+            state_dir: self
+                .state_store
+                .as_ref()
+                .map(|store| store.root().to_path_buf()),
+            trusted_clients: self
+                .state_store
+                .as_ref()
+                .map_or(0, BtStateStore::trusted_client_count),
+            pairing: self.pairing_snapshot(),
             rx_count: self.rx_count,
             tx_sent_count: self.tx_sent_count,
+        }
+    }
+
+    fn start_pairing(&mut self, timeout_seconds: u64) {
+        self.pairing_expires_at = Some(Instant::now() + Duration::from_secs(timeout_seconds));
+    }
+
+    fn stop_pairing(&mut self) {
+        self.pairing_expires_at = None;
+    }
+
+    fn list_clients(&self) -> Result<Vec<mba_protocol::BtClientRecord>, BtControlResponse> {
+        let Some(store) = self.state_store.as_ref() else {
+            return Err(BtControlResponse::error(
+                "state_unavailable",
+                "bluetooth state store is disabled",
+            ));
+        };
+        store.list_clients().map_err(|error| {
+            BtControlResponse::error("internal", format!("failed to list bt clients: {error}"))
+        })
+    }
+
+    fn forget_client(&mut self, client_id: &str) -> Result<bool, BtControlResponse> {
+        let Some(store) = self.state_store.as_mut() else {
+            return Err(BtControlResponse::error(
+                "state_unavailable",
+                "bluetooth state store is disabled",
+            ));
+        };
+        store.forget_client(client_id).map_err(|error| {
+            BtControlResponse::error(
+                "bad_request",
+                format!("failed to forget bt client: {error}"),
+            )
+        })
+    }
+
+    fn pairing_snapshot(&self) -> BlePairingSnapshot {
+        let Some(expires_at) = self.pairing_expires_at else {
+            return BlePairingSnapshot::closed();
+        };
+        let Some(remaining) = remaining_seconds_until(expires_at) else {
+            return BlePairingSnapshot::closed();
+        };
+
+        BlePairingSnapshot {
+            state: "open".to_string(),
+            remaining_seconds: Some(remaining),
         }
     }
 
@@ -215,8 +284,25 @@ struct BleActiveSession {
 struct BleGattStatusSnapshot {
     busy: bool,
     active_client: Option<BleActiveClientSnapshot>,
+    state_dir: Option<PathBuf>,
+    trusted_clients: usize,
+    pairing: BlePairingSnapshot,
     rx_count: u64,
     tx_sent_count: u64,
+}
+
+struct BlePairingSnapshot {
+    state: String,
+    remaining_seconds: Option<u64>,
+}
+
+impl BlePairingSnapshot {
+    fn closed() -> Self {
+        Self {
+            state: "closed".to_string(),
+            remaining_seconds: None,
+        }
+    }
 }
 
 struct BleActiveClientSnapshot {
@@ -252,7 +338,11 @@ where
 {
     info!("starting Matchbox BLE GATT transport");
 
-    let state = Arc::new(RwLock::new(BleGattState::new(router)));
+    let state_store = match options.state_dir.clone() {
+        Some(state_dir) => Some(BtStateStore::open(state_dir)?),
+        None => None,
+    };
+    let state = Arc::new(RwLock::new(BleGattState::new(router, state_store)));
     let session = Session::new()
         .await
         .context("failed to connect to BlueZ over D-Bus")?;
@@ -349,11 +439,107 @@ where
             let state = state.read().await;
             BtControlResponse::ok_status(bt_status(&options, &adapter, &state.status_snapshot()))
         }
+        BT_CONTROL_METHOD_PAIRING_START => {
+            let timeout_seconds = match pairing_timeout_seconds(&request) {
+                Ok(timeout_seconds) => timeout_seconds,
+                Err(response) => return response,
+            };
+            let mut state = state.write().await;
+            state.start_pairing(timeout_seconds);
+            info!(
+                timeout_seconds,
+                "bluetooth pairing mode opened from control socket"
+            );
+            BtControlResponse::ok_status(bt_status(&options, &adapter, &state.status_snapshot()))
+        }
+        BT_CONTROL_METHOD_PAIRING_STOP => {
+            let mut state = state.write().await;
+            state.stop_pairing();
+            info!("bluetooth pairing mode closed from control socket");
+            BtControlResponse::ok_status(bt_status(&options, &adapter, &state.status_snapshot()))
+        }
+        BT_CONTROL_METHOD_CLIENTS => {
+            let state = state.read().await;
+            match state.list_clients() {
+                Ok(clients) => BtControlResponse::ok_clients(clients),
+                Err(response) => response,
+            }
+        }
+        BT_CONTROL_METHOD_FORGET_CLIENT => {
+            let client_id = match forget_client_id(&request) {
+                Ok(client_id) => client_id,
+                Err(response) => return response,
+            };
+            let mut state = state.write().await;
+            match state.forget_client(&client_id) {
+                Ok(true) => {
+                    info!(client_id, "forgot bluetooth client");
+                    BtControlResponse::ok_status(bt_status(
+                        &options,
+                        &adapter,
+                        &state.status_snapshot(),
+                    ))
+                }
+                Ok(false) => BtControlResponse::error(
+                    "not_found",
+                    format!("bluetooth client not found: {client_id}"),
+                ),
+                Err(response) => response,
+            }
+        }
         method => BtControlResponse::error(
             "unsupported_method",
             format!("unsupported bt control method: {method}"),
         ),
     }
+}
+
+fn forget_client_id(request: &BtControlRequest) -> Result<String, BtControlResponse> {
+    let Some(params) = request.params.as_ref() else {
+        return Err(BtControlResponse::error(
+            "bad_request",
+            "forget request is missing params",
+        ));
+    };
+    let Some(client_id) = params.get("client_id").and_then(|value| value.as_str()) else {
+        return Err(BtControlResponse::error(
+            "bad_request",
+            "forget request requires string client_id",
+        ));
+    };
+    if client_id.trim().is_empty() {
+        return Err(BtControlResponse::error(
+            "bad_request",
+            "forget request client_id must not be empty",
+        ));
+    }
+
+    Ok(client_id.to_string())
+}
+
+fn pairing_timeout_seconds(request: &BtControlRequest) -> Result<u64, BtControlResponse> {
+    let Some(params) = request.params.as_ref() else {
+        return Ok(DEFAULT_BT_PAIRING_TIMEOUT_SECONDS);
+    };
+    let Some(timeout_value) = params.get("timeout_seconds") else {
+        return Ok(DEFAULT_BT_PAIRING_TIMEOUT_SECONDS);
+    };
+    let Some(timeout_seconds) = timeout_value.as_u64() else {
+        return Err(BtControlResponse::error(
+            "bad_request",
+            "pairing timeout_seconds must be an integer",
+        ));
+    };
+    if !(1..=MAX_BT_PAIRING_TIMEOUT_SECONDS).contains(&timeout_seconds) {
+        return Err(BtControlResponse::error(
+            "bad_request",
+            format!(
+                "pairing timeout_seconds must be between 1 and {MAX_BT_PAIRING_TIMEOUT_SECONDS}"
+            ),
+        ));
+    }
+
+    Ok(timeout_seconds)
 }
 
 fn bt_status(
@@ -365,13 +551,19 @@ fn bt_status(
         service: SERVICE_NAME.to_string(),
         transport: "mba-bt-ble-local".to_string(),
         device_name: options.device_name.clone(),
+        state_dir: snapshot
+            .state_dir
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        trusted_clients: snapshot.trusted_clients,
         adapter: Some(BtAdapterStatus {
             name: adapter.name.clone(),
             address: adapter.address.clone(),
         }),
         advertising: true,
         service_uuid: SERVICE_UUID.to_string(),
-        pairing_state: options.pairing_state.clone(),
+        pairing_state: snapshot.pairing.state.clone(),
+        pairing_remaining_seconds: snapshot.pairing.remaining_seconds,
         busy: snapshot.busy,
         active_client: snapshot
             .active_client
@@ -753,6 +945,8 @@ fn status_payload(options: &BleGattOptions, snapshot: &BleGattStatusSnapshot) ->
         "service": mba_protocol::SERVICE_NAME,
         "transport": "mba-bt-ble-local",
         "device_name": options.device_name,
+        "state_dir": snapshot.state_dir.as_ref().map(|path| path.display().to_string()),
+        "trusted_clients": snapshot.trusted_clients,
         "protocol_versions": [APP_PROTOCOL_VERSION],
         "chunk_protocol_version": ble::CHUNK_VERSION,
         "max_message_bytes": MAX_MESSAGE_BYTES,
@@ -763,7 +957,8 @@ fn status_payload(options: &BleGattOptions, snapshot: &BleGattStatusSnapshot) ->
         "default_page_limit": DEFAULT_PAGE_LIMIT,
         "max_page_limit": MAX_PAGE_LIMIT,
         "one_in_flight_per_direction": true,
-        "pairing_state": options.pairing_state,
+        "pairing_state": snapshot.pairing.state,
+        "pairing_remaining_seconds": snapshot.pairing.remaining_seconds,
         "busy": snapshot.busy,
         "active_client": active_client,
         "rx_chunk_writes": snapshot.rx_count,
@@ -771,6 +966,16 @@ fn status_payload(options: &BleGattOptions, snapshot: &BleGattStatusSnapshot) ->
     })
     .to_string()
     .into_bytes()
+}
+
+fn remaining_seconds_until(deadline: Instant) -> Option<u64> {
+    let remaining = deadline.checked_duration_since(Instant::now())?;
+    let seconds = remaining.as_secs();
+    if remaining.subsec_nanos() > 0 {
+        Some(seconds.saturating_add(1))
+    } else {
+        Some(seconds)
+    }
 }
 
 fn client_id_for_address(address: Address) -> u64 {
@@ -781,14 +986,14 @@ fn client_id_for_address(address: Address) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use mba_protocol::ErrorCode;
+    use mba_protocol::{BtClientRecord, ErrorCode};
     use serde_json::Value;
 
     use super::*;
     use crate::FakePlayerBackend;
 
     fn test_state() -> BleGattState<FakePlayerBackend> {
-        BleGattState::new(RequestRouter::new(FakePlayerBackend::ready()))
+        BleGattState::new(RequestRouter::new(FakePlayerBackend::ready()), None)
     }
 
     #[test]
@@ -845,8 +1050,160 @@ mod tests {
         let status: Value = serde_json::from_slice(&payload).expect("status JSON parses");
 
         assert_eq!(status["busy"], true);
+        assert_eq!(status["pairing_state"], "closed");
+        assert_eq!(status["trusted_clients"], 0);
         assert_eq!(status["active_client"]["address"], "01:02:03:04:05:06");
         assert_eq!(status["active_client"]["adapter"], "hci0");
         assert_eq!(status["active_client"]["mtu"], 517);
+    }
+
+    #[test]
+    fn pairing_window_reports_open_until_deadline() {
+        let mut state = test_state();
+
+        assert_eq!(state.status_snapshot().pairing.state, "closed");
+
+        state.start_pairing(120);
+        let snapshot = state.status_snapshot();
+
+        assert_eq!(snapshot.pairing.state, "open");
+        let remaining = snapshot
+            .pairing
+            .remaining_seconds
+            .expect("remaining seconds");
+        assert!((1..=120).contains(&remaining));
+
+        state.stop_pairing();
+        assert_eq!(state.status_snapshot().pairing.state, "closed");
+    }
+
+    #[test]
+    fn pairing_timeout_parser_accepts_default_and_rejects_invalid_values() {
+        assert_eq!(
+            pairing_timeout_seconds(&BtControlRequest {
+                method: BT_CONTROL_METHOD_PAIRING_START.to_string(),
+                params: None,
+            })
+            .expect("default timeout"),
+            DEFAULT_BT_PAIRING_TIMEOUT_SECONDS
+        );
+
+        assert!(pairing_timeout_seconds(&BtControlRequest::pairing_start(0)).is_err());
+        assert!(pairing_timeout_seconds(&BtControlRequest::pairing_start(
+            MAX_BT_PAIRING_TIMEOUT_SECONDS + 1
+        ))
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn control_request_starts_and_stops_pairing() {
+        let state = Arc::new(RwLock::new(test_state()));
+        let options = BleGattOptions::default();
+        let adapter = BleAdapterSnapshot {
+            name: "hci0".to_string(),
+            address: "88:A2:9E:B1:87:91".to_string(),
+        };
+
+        let start = handle_control_request(
+            Arc::clone(&state),
+            options.clone(),
+            adapter.clone(),
+            BtControlRequest::pairing_start(120),
+        )
+        .await;
+        let start_status = start.status.expect("start status");
+
+        assert!(start.ok);
+        assert_eq!(start_status.pairing_state, "open");
+        assert!(start_status.pairing_remaining_seconds.is_some());
+
+        let stop =
+            handle_control_request(state, options, adapter, BtControlRequest::pairing_stop()).await;
+        let stop_status = stop.status.expect("stop status");
+
+        assert!(stop.ok);
+        assert_eq!(stop_status.pairing_state, "closed");
+        assert_eq!(stop_status.pairing_remaining_seconds, None);
+    }
+
+    #[tokio::test]
+    async fn control_request_lists_and_forgets_clients() {
+        let state_dir = unique_test_state_dir();
+        let state_store = BtStateStore::open(&state_dir).expect("state store opens");
+        let state = Arc::new(RwLock::new(BleGattState::new(
+            RequestRouter::new(FakePlayerBackend::ready()),
+            Some(state_store),
+        )));
+        let options = BleGattOptions::default();
+        let adapter = BleAdapterSnapshot {
+            name: "hci0".to_string(),
+            address: "88:A2:9E:B1:87:91".to_string(),
+        };
+        let client = BtClientRecord {
+            schema_version: 1,
+            client_id: "phone-1".to_string(),
+            display_name: Some("Pixel 7 Pro".to_string()),
+            trusted: true,
+            created_unix_seconds: 1_765_000_000,
+            last_seen_unix_seconds: Some(1_765_000_120),
+            last_ble_address: Some("57:29:36:B6:FD:53".to_string()),
+            protocol_version: Some(1),
+        };
+        {
+            let mut state = state.write().await;
+            state
+                .state_store
+                .as_mut()
+                .expect("state store")
+                .upsert_client(&client)
+                .expect("client writes");
+        }
+
+        let list = handle_control_request(
+            Arc::clone(&state),
+            options.clone(),
+            adapter.clone(),
+            BtControlRequest::clients(),
+        )
+        .await;
+
+        assert!(list.ok);
+        assert_eq!(list.clients, Some(vec![client]));
+
+        let forget = handle_control_request(
+            Arc::clone(&state),
+            options.clone(),
+            adapter.clone(),
+            BtControlRequest::forget_client("phone-1"),
+        )
+        .await;
+        let status = forget.status.expect("forget status");
+
+        assert!(forget.ok);
+        assert_eq!(status.trusted_clients, 0);
+
+        let missing = handle_control_request(
+            state,
+            options,
+            adapter,
+            BtControlRequest::forget_client("phone-1"),
+        )
+        .await;
+
+        assert!(!missing.ok);
+        assert_eq!(missing.error.expect("error").code, "not_found");
+
+        std::fs::remove_dir_all(state_dir).expect("test state cleanup");
+    }
+
+    fn unique_test_state_dir() -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "mba-bt-gatt-state-test-{}-{nanos}",
+            std::process::id()
+        ))
     }
 }
