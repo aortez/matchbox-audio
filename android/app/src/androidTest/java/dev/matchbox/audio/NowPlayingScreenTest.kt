@@ -78,6 +78,25 @@ class NowPlayingScreenTest {
     }
 
     @Test
+    fun reconnectingStateShowsRetryDetail() {
+        compose.setContent {
+            NowPlayingScreen(
+                state = NowPlayingUiState.failed("BLE connection timed out"),
+                onRefresh = {},
+                usingBle = true,
+                bleConnectionState = BleConnectionState(
+                    phase = BleConnectionPhase.Reconnecting,
+                    errorMessage = "Retrying BLE in 1s: No Matchbox BLE device found",
+                ),
+            )
+        }
+
+        compose.onNodeWithTag("connection-status").assertIsDisplayed()
+        compose.onAllNodesWithText("Reconnecting").assertCountEquals(2)
+        compose.onNodeWithText("Retrying BLE in 1s: No Matchbox BLE device found").assertIsDisplayed()
+    }
+
+    @Test
     fun busyStateShowsDeviceBusyStatus() {
         compose.setContent {
             NowPlayingScreen(

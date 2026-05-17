@@ -487,6 +487,27 @@ Phase 6 auth-required status:
   rejected GATT attempt, and allows a later refresh/connect attempt to retry
   after pairing mode is opened.
 
+Phase 6 reconnect-backoff status:
+
+- Android now keeps a small BLE reconnect state machine separate from the GATT
+  callback code. User-initiated connects reset the policy, successful connects
+  reset the delay, and terminal protocol states stop automatic retry.
+- Retryable GATT, scan, discovery, subscription, write, and request-timeout
+  failures move the transport into `Reconnecting` and schedule retries with
+  capped exponential backoff: 1 second, 2 seconds, 4 seconds, then 8 seconds.
+- Permission failures, disabled Bluetooth, invalid protocol/chunk data,
+  `auth_required`, and `busy` remain terminal until the user takes action and
+  tries again.
+- JVM tests cover backoff growth, cap behavior, success reset, closed
+  connection behavior, terminal protocol states, and manual retry after a
+  terminal state.
+- Connected Compose tests run against the Pixel 7 Pro after pinning
+  `androidx.tracing` so the AndroidX test harness and app runtime agree on the
+  tracing API.
+- Validated on May 17, 2026 PDT with the Pixel 7 Pro and
+  `matchbox-audio.local`: real BLE smoke still matched the Pi snapshot, app
+  restart reconnect, and lock/unlock reconnect paths.
+
 ## Phase 6: Android BLE Connection
 
 - [x] Add BLE scan/association flow.
@@ -500,8 +521,8 @@ Phase 6 auth-required status:
 - [x] Add permission-denied UI.
 - [x] Add auth-required UI.
 - [x] Add busy-device UI.
-- [ ] Add reconnect backoff.
-- [ ] Add tests for connection state-machine behavior.
+- [x] Add reconnect backoff.
+- [x] Add tests for connection state-machine behavior.
 - [x] Verify app can display `system.snapshot` from the Pi.
 - [x] Add real Pi plus Android app BLE smoke helper.
 - [x] Verify app reconnects after app process restart.

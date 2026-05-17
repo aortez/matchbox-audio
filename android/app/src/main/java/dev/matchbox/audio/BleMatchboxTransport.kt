@@ -75,6 +75,7 @@ class BleMatchboxTransport(
     private val mainHandler = Handler(Looper.getMainLooper())
     private val requestMutex = Mutex()
     private val helloMutex = Mutex()
+    private val reconnectStateMachine = BleReconnectStateMachine()
 
     private val _connectionState = MutableStateFlow(BleConnectionState())
     val connectionState: StateFlow<BleConnectionState> = _connectionState.asStateFlow()
@@ -101,6 +102,10 @@ class BleMatchboxTransport(
             startScanFallbackOnMain()
         }
     }
+    private val reconnectBackoffRunnable = Runnable {
+        reconnectStateMachine.onScheduledRetryStarted()
+        connectOnMain(resetBackoff = false, scheduledRetry = true)
+    }
 
     fun connect() {
         runOnMain {
@@ -110,6 +115,8 @@ class BleMatchboxTransport(
 
     fun close() {
         runOnMain {
+            cancelScheduledReconnectOnMain()
+            reconnectStateMachine.onConnectionClosed()
             completePendingRequests(BleTransportException("BLE transport closed"))
             stopScanOnMain()
             closeGattOnMain(updateState = false)
@@ -147,14 +154,18 @@ class BleMatchboxTransport(
             }
         }
 
-        val state = withTimeout(BleProtocol.CONNECT_TIMEOUT_MILLIS) {
-            connectionState.first {
-                it.phase == BleConnectionPhase.Ready ||
-                    it.phase == BleConnectionPhase.Failed ||
-                    it.phase == BleConnectionPhase.AuthRequired ||
-                    it.phase == BleConnectionPhase.Busy ||
-                    it.phase == BleConnectionPhase.Disconnected
+        val state = try {
+            withTimeout(BleProtocol.CONNECT_TIMEOUT_MILLIS) {
+                connectionState.first {
+                    it.phase == BleConnectionPhase.Ready ||
+                        it.phase == BleConnectionPhase.Failed ||
+                        it.phase == BleConnectionPhase.AuthRequired ||
+                        it.phase == BleConnectionPhase.Busy ||
+                        it.phase == BleConnectionPhase.Disconnected
+                }
             }
+        } catch (_: TimeoutCancellationException) {
+            throw BleTransportException("BLE connection timed out")
         }
         if (state.phase != BleConnectionPhase.Ready) {
             throw BleTransportException(state.errorMessage ?: "BLE transport is not connected")
@@ -216,38 +227,31 @@ class BleMatchboxTransport(
             }
         }
 
-    private fun connectOnMain() {
-        when (_connectionState.value.phase) {
-            BleConnectionPhase.Reconnecting,
-            BleConnectionPhase.Scanning,
-            BleConnectionPhase.Connecting,
-            BleConnectionPhase.RequestingMtu,
-            BleConnectionPhase.DiscoveringServices,
-            BleConnectionPhase.ReadingStatus,
-            BleConnectionPhase.Subscribing,
-            BleConnectionPhase.Ready,
-            -> return
+    private fun connectOnMain(resetBackoff: Boolean = true, scheduledRetry: Boolean = false) {
+        if (resetBackoff) {
+            cancelScheduledReconnectOnMain()
+            reconnectStateMachine.onConnectRequested()
+        }
 
-            BleConnectionPhase.Idle,
-            BleConnectionPhase.Disconnected,
-            BleConnectionPhase.Failed,
-            BleConnectionPhase.AuthRequired,
-            BleConnectionPhase.Busy,
-            -> Unit
+        val currentPhase = _connectionState.value.phase
+        val waitingForScheduledRetry =
+            scheduledRetry && currentPhase == BleConnectionPhase.Reconnecting
+        if (currentPhase.isConnectionAttemptActive() && !waitingForScheduledRetry) {
+            return
         }
 
         if (!hasScanPermission()) {
-            failOnMain("Missing Android Bluetooth scan permission")
+            failOnMain("Missing Android Bluetooth scan permission", retryable = false)
             return
         }
         if (!hasConnectPermission()) {
-            failOnMain("Missing Android Bluetooth connect permission")
+            failOnMain("Missing Android Bluetooth connect permission", retryable = false)
             return
         }
 
         val adapter = bluetoothAdapter()
         if (adapter == null || !adapter.isEnabled) {
-            failOnMain("Bluetooth adapter unavailable or disabled")
+            failOnMain("Bluetooth adapter unavailable or disabled", retryable = false)
             return
         }
 
@@ -286,7 +290,7 @@ class BleMatchboxTransport(
         resetProtocolStateOnMain()
         val adapter = bluetoothAdapter()
         if (adapter == null || !adapter.isEnabled) {
-            failOnMain("Bluetooth adapter unavailable or disabled")
+            failOnMain("Bluetooth adapter unavailable or disabled", retryable = false)
             return
         }
         startScanOnMain(adapter)
@@ -295,7 +299,7 @@ class BleMatchboxTransport(
     private fun startScanOnMain(adapter: BluetoothAdapter) {
         val nextScanner = adapter.bluetoothLeScanner
         if (nextScanner == null) {
-            failOnMain("Bluetooth LE scanner unavailable")
+            failOnMain("Bluetooth LE scanner unavailable", retryable = false)
             return
         }
 
@@ -313,7 +317,10 @@ class BleMatchboxTransport(
             nextScanner.startScan(listOf(filter), settings, scanCallback)
             mainHandler.postDelayed(scanTimeoutRunnable, BleProtocol.SCAN_TIMEOUT_MILLIS)
         } catch (error: SecurityException) {
-            failOnMain("Android denied BLE scan: ${error.message ?: "missing permission"}")
+            failOnMain(
+                "Android denied BLE scan: ${error.message ?: "missing permission"}",
+                retryable = false,
+            )
         } catch (error: RuntimeException) {
             failOnMain("BLE scan could not start: ${error.message ?: error.javaClass.simpleName}")
         }
@@ -326,7 +333,7 @@ class BleMatchboxTransport(
         fallbackName: String? = null,
     ): Boolean {
         if (!hasConnectPermission()) {
-            failOnMain("Missing Android Bluetooth connect permission")
+            failOnMain("Missing Android Bluetooth connect permission", retryable = false)
             return false
         }
 
@@ -344,7 +351,10 @@ class BleMatchboxTransport(
                 device.connectGatt(appContext, false, gattCallback)
             }
         } catch (error: SecurityException) {
-            failOnMain("Android denied GATT connect: ${error.message ?: "missing permission"}")
+            failOnMain(
+                "Android denied GATT connect: ${error.message ?: "missing permission"}",
+                retryable = false,
+            )
             null
         }
         if (gatt == null) {
@@ -479,6 +489,8 @@ class BleMatchboxTransport(
             phase = BleConnectionPhase.Ready,
             errorMessage = null,
         )
+        reconnectStateMachine.onConnectionReady()
+        cancelScheduledReconnectOnMain()
         rememberConnectedDeviceOnMain()
     }
 
@@ -566,7 +578,7 @@ class BleMatchboxTransport(
         val completed = try {
             txReassembler.push(value)
         } catch (error: BleChunkException) {
-            failOnMain("Rejected TX BLE chunk: ${error.message}")
+            failOnMain("Rejected TX BLE chunk: ${error.message}", retryable = false)
             return
         }
 
@@ -579,7 +591,7 @@ class BleMatchboxTransport(
         val root = try {
             JSONObject(json)
         } catch (error: Exception) {
-            failOnMain("Invalid BLE protocol JSON: ${error.message}")
+            failOnMain("Invalid BLE protocol JSON: ${error.message}", retryable = false)
             return
         }
 
@@ -643,22 +655,20 @@ class BleMatchboxTransport(
                         discoverServicesOnMain(gatt)
                     }
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                    val wasReconnecting =
-                        _connectionState.value.phase == BleConnectionPhase.Reconnecting
+                    val previousState = _connectionState.value
+                    val wasReconnecting = previousState.phase == BleConnectionPhase.Reconnecting
                     completePendingRequests(BleTransportException("BLE GATT disconnected"))
                     closeGattOnMain(updateState = false)
                     resetProtocolStateOnMain()
                     if (wasReconnecting) {
                         startScanFallbackOnMain()
                     } else {
-                        _connectionState.value = _connectionState.value.copy(
-                            phase = BleConnectionPhase.Disconnected,
-                            errorMessage = if (status == BluetoothGatt.GATT_SUCCESS) {
-                                null
-                            } else {
-                                "BLE GATT disconnected with status $status"
-                            },
-                        )
+                        val message = if (status == BluetoothGatt.GATT_SUCCESS) {
+                            "BLE GATT disconnected"
+                        } else {
+                            "BLE GATT disconnected with status $status"
+                        }
+                        scheduleReconnectAfterFailureOnMain(message, previousState)
                     }
                 } else if (status != BluetoothGatt.GATT_SUCCESS) {
                     if (_connectionState.value.phase == BleConnectionPhase.Reconnecting) {
@@ -815,6 +825,8 @@ class BleMatchboxTransport(
     private fun markProtocolTerminalOnMain(phase: BleConnectionPhase, message: String) {
         val error = BleTransportException(message)
         val current = _connectionState.value
+        cancelScheduledReconnectOnMain()
+        reconnectStateMachine.onTerminalProtocolState()
         mainHandler.removeCallbacks(reconnectTimeoutRunnable)
         stopScanOnMain()
         closeGattOnMain(updateState = false)
@@ -830,17 +842,55 @@ class BleMatchboxTransport(
         )
     }
 
-    private fun failOnMain(message: String) {
+    private fun failOnMain(message: String, retryable: Boolean = true) {
         val error = BleTransportException(message)
+        val previousState = _connectionState.value
         mainHandler.removeCallbacks(reconnectTimeoutRunnable)
         stopScanOnMain()
         closeGattOnMain(updateState = false)
         resetProtocolStateOnMain()
         completePendingRequests(error)
-        _connectionState.value = _connectionState.value.copy(
-            phase = BleConnectionPhase.Failed,
-            errorMessage = message,
+        if (retryable) {
+            scheduleReconnectAfterFailureOnMain(message, previousState)
+        } else {
+            cancelScheduledReconnectOnMain()
+            reconnectStateMachine.onConnectionClosed()
+            _connectionState.value = previousState.copy(
+                phase = BleConnectionPhase.Failed,
+                errorMessage = message,
+            )
+        }
+    }
+
+    private fun scheduleReconnectAfterFailureOnMain(
+        message: String,
+        previousState: BleConnectionState,
+    ) {
+        cancelScheduledReconnectOnMain()
+        val delayMillis =
+            reconnectStateMachine.nextRetryDelayMillisAfterFailure(previousState.phase)
+        if (delayMillis == null) {
+            reconnectStateMachine.onConnectionClosed()
+            _connectionState.value = previousState.copy(
+                phase = BleConnectionPhase.Failed,
+                errorMessage = message,
+            )
+            return
+        }
+
+        _connectionState.value = BleConnectionState(
+            phase = BleConnectionPhase.Reconnecting,
+            deviceName = previousState.deviceName,
+            deviceAddress = previousState.deviceAddress,
+            mtu = previousState.mtu,
+            statusJson = previousState.statusJson,
+            errorMessage = "Retrying BLE in ${delayMillis / 1_000}s: $message",
         )
+        mainHandler.postDelayed(reconnectBackoffRunnable, delayMillis)
+    }
+
+    private fun cancelScheduledReconnectOnMain() {
+        mainHandler.removeCallbacks(reconnectBackoffRunnable)
     }
 
     private fun completePendingRequests(error: Throwable) {
