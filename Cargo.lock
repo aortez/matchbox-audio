@@ -985,6 +985,7 @@ dependencies = [
  "clap",
  "futures-util",
  "mba-protocol",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",

@@ -1,6 +1,6 @@
 [Unit]
 Description=Matchbox Audio Bluetooth GATT daemon
-After=dbus.service bluetooth.service data.mount mba-data-init.service
+After=dbus.service bluetooth.service data.mount mba-data-init.service mba-player.service
 Wants=bluetooth.service data.mount mba-data-init.service
 
 [Service]
@@ -8,7 +8,7 @@ Type=simple
 User=root
 Group=matchbox
 Environment=RUST_LOG=mba_bt=info,warn
-ExecStart=/usr/bin/mba-bt --ble-local --control-socket /run/mba-bt/control.sock --state-dir /data/matchbox-audio/bt
+ExecStart=/usr/bin/mba-bt --ble-local --player-server http://127.0.0.1:8090 --control-socket /run/mba-bt/control.sock --state-dir /data/matchbox-audio/bt
 Restart=on-failure
 RestartSec=2
 RuntimeDirectory=mba-bt
@@ -22,7 +22,7 @@ ProtectControlGroups=yes
 ProtectKernelModules=yes
 ProtectKernelTunables=yes
 ReadWritePaths=/data/matchbox-audio/bt
-RestrictAddressFamilies=AF_UNIX
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 RestrictSUIDSGID=yes
 
 [Install]

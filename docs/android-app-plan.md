@@ -211,7 +211,7 @@ Phase 3 first-slice status:
 
 - `mba-bt --ble-local` registers the GATT service, advertises as
   `Matchbox Audio`, and routes RX/TX chunks through `RequestRouter` with
-  `FakePlayerBackend`.
+  the configured `PlayerBackend`.
 - The Android smoke app now sends `system.snapshot` after the `system.hello`
   response, so a phone-side run can validate both methods over the same BLE
   connection.
@@ -327,6 +327,25 @@ Phase 4 persistent BT state status:
   `root:root 0700`, Android BLE smoke still completed `system.hello` and
   `system.snapshot`, and `npm run hardening` passed.
 
+Phase 4 BLE player-backend status:
+
+- `mba-bt --ble-local` now queries `mba-player` over local HTTP for
+  `system.snapshot` by default instead of returning the deterministic fake
+  snapshot.
+- `--player-server <url>` selects the `mba-player` base URL. The packaged
+  service passes `http://127.0.0.1:8090`.
+- `--fake-player` keeps the previous deterministic backend available for local
+  BLE smoke tests and unit tests.
+- `mba-bt.service` now allows `AF_INET`/`AF_INET6` in addition to `AF_UNIX`
+  because the daemon needs loopback HTTP access to `mba-player`.
+- Validated on May 16, 2026 PDT:
+  - `cargo test --workspace` passed.
+  - `./update.sh --smoke` deployed the new service to A/B slot `b` on
+    `matchbox-audio.local`.
+  - `mba-bt.service` was active with
+    `--player-server http://127.0.0.1:8090`.
+  - `npm run hardening` passed after the service hardening update.
+
 ## Phase 5: Android Project Skeleton
 
 - [x] Add Android Gradle project under `android/`.
@@ -338,7 +357,7 @@ Phase 4 persistent BT state status:
 - [x] Add Android Bluetooth permissions.
 - [x] Add `MatchboxTransport` interface.
 - [x] Add fake scripted transport.
-- [ ] Add BLE transport implementation shell behind the interface.
+- [x] Add BLE transport implementation shell behind the interface.
 - [x] Add protocol fixture tests on the JVM.
 - [ ] Add Compose navigation:
   - [ ] setup
@@ -377,22 +396,66 @@ Phase 5 first-slice status:
   `espresso-core:3.7.0` after `espresso-core:3.6.1` failed on Android 16 due
   to a removed platform `InputManager.getInstance` method.
 
+Phase 5 BLE transport-shell status:
+
+- Added Android-side BLE UUID/constants and chunk encoder/reassembler matching
+  the Rust `mba-protocol` BLE chunk contract.
+- Added JVM tests for single-chunk messages, multi-chunk reassembly, shared
+  `system.hello` fixture round-trip, oversized messages, unknown flags, and
+  out-of-order chunks.
+- Added `BleMatchboxTransport` behind `MatchboxTransport`. It can scan for the
+  Matchbox service UUID, connect with `TRANSPORT_LE`, request MTU 517, discover
+  the Matchbox service, read Status, subscribe to TX notifications, write
+  chunked JSON requests to RX, reassemble TX notifications, send `system.hello`,
+  and parse `system.snapshot` into `DeviceSnapshot`.
+- At this point, the Compose UI still defaulted to `FakeMatchboxTransport`;
+  permission/setup screens, visible connection status, known-device reconnect,
+  and real-device UI wiring were deferred to Phase 6.
+
+Phase 6 first-slice status:
+
+- The app now keeps a reusable `BleMatchboxTransport` instance at the activity
+  level and closes it with the activity.
+- The now-playing screen has a Connect BLE action. It requests the Android
+  runtime Bluetooth permissions required for the current OS version, then
+  switches the view model from the fake transport to `BleMatchboxTransport`.
+- The screen shows the current BLE connection phase, denied-permission state,
+  and a Demo action to switch back to `FakeMatchboxTransport`.
+- Compose instrumented tests cover the BLE status and denied-permission states.
+- Added `tools/android-real-ble-smoke.mjs`, an ADB/SSH helper that installs the
+  production Android app, connects it to the packaged Pi `mba-bt.service`,
+  compares visible now-playing values with the Pi HTTP status API, and captures
+  a screenshot for review.
+- Validated on May 16, 2026 PDT:
+  - `./gradlew test` passed.
+  - `./gradlew connectedDebugAndroidTest` passed on the Pixel 7 Pro.
+  - `./gradlew installDebug` installed the APK, and `tools/android-capture.sh`
+    captured the new Connect BLE screen.
+  - Before the BLE daemon used the real player backend, tapping Connect BLE on
+    the Pixel 7 Pro proved the app transport path but still displayed the
+    deterministic fake snapshot (`Single`, `Pink Floyd`, queue `1 / 1`).
+  - After deploying the real `mba-player` backend for `mba-bt`, tapping Connect
+    BLE displayed the same snapshot as `mba-cli status`: `Are You Alive?`,
+    `Orbital feat. Penelope Isles`, `Optical Delusion`, volume `80`, queue
+    `1 / 8`, network `home`, connection `onionchan`.
+
 ## Phase 6: Android BLE Connection
 
-- [ ] Add BLE scan/association flow.
+- [x] Add BLE scan/association flow.
 - [ ] Add known-device reconnect flow.
-- [ ] Add GATT connect/disconnect.
-- [ ] Add Matchbox service discovery.
-- [ ] Add characteristic write and notification subscription.
-- [ ] Add MTU request and conservative-MTU fallback behavior.
-- [ ] Add protocol read/write loop.
-- [ ] Add connection status UI.
-- [ ] Add permission-denied UI.
+- [x] Add GATT connect/disconnect.
+- [x] Add Matchbox service discovery.
+- [x] Add characteristic write and notification subscription.
+- [x] Add MTU request and conservative-MTU fallback behavior.
+- [x] Add protocol read/write loop.
+- [x] Add connection status UI.
+- [x] Add permission-denied UI.
 - [ ] Add auth-required UI.
 - [ ] Add busy-device UI.
 - [ ] Add reconnect backoff.
 - [ ] Add tests for connection state-machine behavior.
-- [ ] Verify app can display `system.snapshot` from the Pi.
+- [x] Verify app can display `system.snapshot` from the Pi.
+- [x] Add real Pi plus Android app BLE smoke helper.
 - [ ] Verify app reconnects after app process restart.
 - [ ] Verify app reconnects after phone lock/unlock.
 - [ ] Verify app behavior while phone is connected to car Bluetooth audio.

@@ -4,15 +4,19 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use mba_protocol::{
     BuildInfo, NetworkInfo, NetworkMode, PlaybackInfo, PlaybackState, ServiceInfo, ServiceState,
     StatusResponse, TrackInfo, API_VERSION, SERVICE_NAME,
 };
+use reqwest::{Client, StatusCode, Url};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub type PlayerResult<T> = Result<T, PlayerError>;
+
+const DEFAULT_PLAYER_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub trait PlayerBackend: Clone + Send + Sync + 'static {
     fn snapshot(&self) -> BoxFuture<'_, PlayerResult<StatusResponse>>;
@@ -34,6 +38,87 @@ impl fmt::Display for PlayerError {
 }
 
 impl Error for PlayerError {}
+
+#[derive(Debug, Clone)]
+pub enum MatchboxPlayerBackend {
+    Fake(FakePlayerBackend),
+    Http(HttpPlayerBackend),
+}
+
+impl MatchboxPlayerBackend {
+    pub fn fake_ready() -> Self {
+        Self::Fake(FakePlayerBackend::ready())
+    }
+
+    pub fn http(base_url: Url) -> PlayerResult<Self> {
+        Ok(Self::Http(HttpPlayerBackend::new(base_url)?))
+    }
+}
+
+impl PlayerBackend for MatchboxPlayerBackend {
+    fn snapshot(&self) -> BoxFuture<'_, PlayerResult<StatusResponse>> {
+        match self {
+            Self::Fake(backend) => backend.snapshot(),
+            Self::Http(backend) => backend.snapshot(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct HttpPlayerBackend {
+    client: Client,
+    base_url: Url,
+}
+
+impl HttpPlayerBackend {
+    pub fn new(base_url: Url) -> PlayerResult<Self> {
+        let client = Client::builder()
+            .timeout(DEFAULT_PLAYER_REQUEST_TIMEOUT)
+            .build()
+            .map_err(|error| {
+                PlayerError::Internal(format!("failed to build player HTTP client: {error}"))
+            })?;
+
+        Ok(Self { client, base_url })
+    }
+
+    fn status_url(&self) -> PlayerResult<Url> {
+        self.base_url
+            .join("api/v1/status")
+            .map_err(|error| PlayerError::Internal(format!("invalid player status URL: {error}")))
+    }
+}
+
+impl PlayerBackend for HttpPlayerBackend {
+    fn snapshot(&self) -> BoxFuture<'_, PlayerResult<StatusResponse>> {
+        Box::pin(async move {
+            let url = self.status_url()?;
+            let response = self.client.get(url.clone()).send().await.map_err(|error| {
+                PlayerError::Unavailable(format!("failed to query mba-player at {url}: {error}"))
+            })?;
+
+            let status = response.status();
+            if !status.is_success() {
+                return Err(player_status_error(status, url.as_str()));
+            }
+
+            response.json::<StatusResponse>().await.map_err(|error| {
+                PlayerError::Internal(format!(
+                    "failed to decode mba-player status from {url}: {error}"
+                ))
+            })
+        })
+    }
+}
+
+fn player_status_error(status: StatusCode, url: &str) -> PlayerError {
+    let message = format!("mba-player status request to {url} returned HTTP {status}");
+    if status.is_server_error() {
+        PlayerError::Unavailable(message)
+    } else {
+        PlayerError::Internal(message)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct FakePlayerBackend {
@@ -112,5 +197,117 @@ pub fn sample_snapshot() -> StatusResponse {
             }),
             queue_length: 1,
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
+
+    #[tokio::test]
+    async fn http_player_backend_fetches_status_snapshot() {
+        let expected = sample_snapshot();
+        let server = TestHttpServer::responding_with(
+            StatusCode::OK,
+            serde_json::to_vec(&expected).expect("snapshot serializes"),
+        );
+
+        let backend = HttpPlayerBackend::new(server.base_url()).expect("backend builds");
+        let snapshot = backend.snapshot().await.expect("snapshot succeeds");
+
+        assert_eq!(snapshot, expected);
+        assert_eq!(server.request_path(), "/api/v1/status");
+    }
+
+    #[tokio::test]
+    async fn http_player_backend_reports_player_unavailable_on_server_error() {
+        let server =
+            TestHttpServer::responding_with(StatusCode::SERVICE_UNAVAILABLE, b"not ready".to_vec());
+        let backend = HttpPlayerBackend::new(server.base_url()).expect("backend builds");
+
+        let error = backend.snapshot().await.expect_err("server error fails");
+
+        assert!(matches!(error, PlayerError::Unavailable(_)));
+        assert!(error.to_string().contains("HTTP 503 Service Unavailable"));
+    }
+
+    #[tokio::test]
+    async fn http_player_backend_reports_internal_error_on_bad_json() {
+        let server = TestHttpServer::responding_with(StatusCode::OK, b"not json".to_vec());
+        let backend = HttpPlayerBackend::new(server.base_url()).expect("backend builds");
+
+        let error = backend.snapshot().await.expect_err("bad json fails");
+
+        assert!(matches!(error, PlayerError::Internal(_)));
+        assert!(error.to_string().contains("failed to decode"));
+    }
+
+    struct TestHttpServer {
+        base_url: Url,
+        join: thread::JoinHandle<String>,
+    }
+
+    impl TestHttpServer {
+        fn responding_with(status: StatusCode, body: Vec<u8>) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("test listener binds");
+            let addr = listener.local_addr().expect("test listener address");
+            let join = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().expect("test connection accepted");
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 1024];
+                loop {
+                    let n = stream.read(&mut buffer).expect("test request read");
+                    if n == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..n]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+
+                let status_line = format!(
+                    "HTTP/1.1 {} {}\r\n",
+                    status.as_u16(),
+                    status.canonical_reason().unwrap_or("Unknown")
+                );
+                stream
+                    .write_all(status_line.as_bytes())
+                    .expect("status line written");
+                write!(
+                    stream,
+                    "content-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                )
+                .expect("headers written");
+                stream.write_all(&body).expect("body written");
+
+                let request = String::from_utf8_lossy(&request);
+                request
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .unwrap_or("")
+                    .to_string()
+            });
+
+            Self {
+                base_url: Url::parse(&format!("http://{addr}/")).expect("test URL parses"),
+                join,
+            }
+        }
+
+        fn base_url(&self) -> Url {
+            self.base_url.clone()
+        }
+
+        fn request_path(self) -> String {
+            self.join.join().expect("test server joined")
+        }
     }
 }

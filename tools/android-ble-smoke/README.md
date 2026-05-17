@@ -26,10 +26,13 @@ Before running the app, run either the original Pi-side spike:
 cargo run --manifest-path tools/ble-gatt-spike/Cargo.toml
 ```
 
-or the Phase 3 `mba-bt` BLE-local mode:
+or the Phase 3 `mba-bt` BLE-local mode with the deterministic fake player
+backend:
 
 ```sh
-cargo run -p mba-bt -- --ble-local --control-socket /tmp/mba-bt/control.sock
+cargo run -p mba-bt -- --ble-local --fake-player \
+  --control-socket /tmp/mba-bt/control.sock \
+  --state-dir /tmp/mba-bt/state
 ```
 
 While `mba-bt --ble-local` is running, local daemon state can be inspected with:
@@ -45,8 +48,70 @@ cargo run -p mba-cli -- bt --socket /tmp/mba-bt/control.sock pairing start --tim
 cargo run -p mba-cli -- bt --socket /tmp/mba-bt/control.sock pairing stop
 ```
 
-For the Matchbox target image, use the cross-build and SSH commands documented
-in `../ble-gatt-spike/README.md`.
+## Real Pi and Android Smoke
+
+The production smoke path uses the packaged `mba-bt.service` on the Pi and an
+attached Android phone.
+
+The repeatable helper for the production Android app is:
+
+```sh
+tools/android-real-ble-smoke.mjs --timeout 45000
+```
+
+It installs `android/app`, wakes the phone, clears stale app sessions, verifies
+that the Pi BLE daemon is advertising and idle, reads the Pi player status,
+launches the Android app, taps **Connect BLE**, waits until the app UI matches
+the Pi status, and saves a screenshot to
+`/tmp/matchbox-android-real-ble-smoke.png`.
+
+The helper uses `JAVA_HOME` when it points at a JDK with `bin/javac`; otherwise
+it tries Android Studio's bundled JBR at
+`/home/oldman/.progs/android-studio/jbr`. Use `--java-home <path>` to override
+that detection.
+
+Use `--skip-install` when the current APK is already installed.
+
+1. Deploy the current image and run the device smoke checks:
+
+   ```sh
+   ./update.sh --smoke
+   ```
+
+2. Confirm the Pi-side Bluetooth daemon is advertising and idle:
+
+   ```sh
+   ssh matchbox@matchbox-audio.local 'mba-cli bt status'
+   ```
+
+   Expected fields include `advertising: true` and `busy: false`.
+
+3. Install the Android smoke APK:
+
+   ```sh
+   cd tools/android-ble-smoke
+   JAVA_HOME=/home/oldman/.progs/android-studio/jbr ./gradlew :app:assembleDebug
+   adb install -r app/build/outputs/apk/debug/app-debug.apk
+   ```
+
+4. Launch the smoke app on the phone, grant Bluetooth permissions, and tap
+   **Start BLE Smoke**.
+
+5. The log should show the phone scanning, connecting, requesting MTU 517,
+   reading Status, subscribing to TX notifications, sending `system.hello`,
+   then sending `system.snapshot`.
+
+6. Compare the `system.snapshot` response in the app log with the real Pi
+   status:
+
+   ```sh
+   target/debug/mba-cli --server http://matchbox-audio.local:8090 status
+   target/debug/mba-cli --server http://matchbox-audio.local:8090 queue
+   ```
+
+For the production Android app, install `android/app` instead of
+`tools/android-ble-smoke`, tap **Connect BLE**, then compare the now-playing
+screen with the same `mba-cli status` output.
 
 Expected app flow:
 

@@ -6,23 +6,32 @@ use std::{
 use anyhow::Context;
 use clap::Parser;
 use mba_bt::{
-    encode_frame, run_ble_gatt, BleGattOptions, FakePlayerBackend, FrameDecoder, RequestRouter,
+    encode_frame, run_ble_gatt, BleGattOptions, FrameDecoder, MatchboxPlayerBackend, RequestRouter,
     RouteOutput,
 };
 use mba_protocol::{
     ErrorCode, ProtocolError, ProtocolMessage, DEFAULT_BT_CONTROL_SOCKET, DEFAULT_BT_STATE_DIR,
 };
+use reqwest::Url;
 
 #[derive(Debug, Parser)]
 #[command(about = "Local Matchbox Bluetooth protocol exerciser")]
 struct Args {
     #[arg(long, help = "Read and write length-prefixed protocol frames on stdio")]
     stdio: bool,
+    #[arg(long, help = "Advertise the local BLE GATT server")]
+    ble_local: bool,
     #[arg(
         long,
-        help = "Advertise the local BLE GATT server with a fake player backend"
+        default_value = "http://127.0.0.1:8090",
+        help = "mba-player base URL used by the real player backend"
     )]
-    ble_local: bool,
+    player_server: Url,
+    #[arg(
+        long,
+        help = "Use a deterministic fake player backend instead of querying mba-player"
+    )]
+    fake_player: bool,
     #[arg(
         long,
         default_value = DEFAULT_BT_CONTROL_SOCKET,
@@ -55,9 +64,9 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!("select exactly one mode: --stdio or --ble-local");
     }
 
+    let player = player_backend(&args)?;
     if args.ble_local {
-        let router =
-            RequestRouter::new(FakePlayerBackend::ready()).with_build_version("mba-bt-ble-local");
+        let router = RequestRouter::new(player).with_build_version("mba-bt-ble-local");
         let mut options = BleGattOptions::default();
         options.control_socket = if args.no_control_socket {
             None
@@ -72,8 +81,16 @@ async fn main() -> anyhow::Result<()> {
         return run_ble_gatt(router, options).await;
     }
 
-    let router = RequestRouter::new(FakePlayerBackend::ready()).with_build_version("mba-bt-stdio");
+    let router = RequestRouter::new(player).with_build_version("mba-bt-stdio");
     serve_stdio(router).await
+}
+
+fn player_backend(args: &Args) -> anyhow::Result<MatchboxPlayerBackend> {
+    if args.fake_player {
+        return Ok(MatchboxPlayerBackend::fake_ready());
+    }
+
+    MatchboxPlayerBackend::http(args.player_server.clone()).map_err(Into::into)
 }
 
 async fn serve_stdio<P>(router: RequestRouter<P>) -> anyhow::Result<()>

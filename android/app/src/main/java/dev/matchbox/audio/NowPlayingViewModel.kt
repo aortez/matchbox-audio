@@ -8,10 +8,14 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.launch
 
 class NowPlayingViewModel(
-    private val transport: MatchboxTransport = FakeMatchboxTransport(),
+    private var transport: MatchboxTransport = FakeMatchboxTransport(),
 ) : ViewModel() {
     var uiState by mutableStateOf(NowPlayingUiState())
         private set
+
+    fun useTransport(transport: MatchboxTransport) {
+        this.transport = transport
+    }
 
     fun refresh() {
         viewModelScope.launch {

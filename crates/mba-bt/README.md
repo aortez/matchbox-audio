@@ -8,16 +8,18 @@ Current pieces:
 
 - `RequestRouter` accepts complete `ProtocolMessage` requests and returns
   protocol responses/events.
+- `HttpPlayerBackend` queries `mba-player` for real `system.snapshot`
+  responses.
 - `FakePlayerBackend` supplies deterministic `system.snapshot` responses for
-  tests and the local exerciser.
+  tests and fake-player local smoke runs.
 - `SessionGate` enforces one active client and returns structured `busy`
   errors for later connection code.
 - `FrameDecoder` and `encode_frame` provide a local length-prefixed development
   transport.
 - `InMemoryBleTransport` proves BLE chunks can reassemble into the same router
   path used by framed local transports.
-- The BLE-local GATT mode registers the Matchbox service through BlueZ while
-  still using `FakePlayerBackend`.
+- The BLE-local GATT mode registers the Matchbox service through BlueZ and uses
+  `mba-player` over local HTTP by default.
 - BLE-local treats TX notification subscription as the active app session,
   gates RX writes by Bluetooth address, and releases the session when
   notifications close.
@@ -45,9 +47,10 @@ cargo run -p mba-bt -- --ble-local
 
 `--ble-local` registers the Matchbox GATT service through BlueZ, advertises as
 `Matchbox Audio`, accepts RX writes, routes complete messages through
-`RequestRouter`, and sends TX notifications. It still uses `FakePlayerBackend`
-so BLE behavior can be debugged before the real `mba-player` HTTP backend is
-introduced.
+`RequestRouter`, and sends TX notifications. By default, `system.snapshot`
+queries `mba-player` at `http://127.0.0.1:8090`. Use `--player-server <url>`
+to point at another daemon or `--fake-player` for deterministic local BLE
+smoke tests without MPD.
 
 The active app session starts when a phone subscribes to the TX notification
 characteristic. That gives `mba-bt` a response path. A second subscriber gets a
