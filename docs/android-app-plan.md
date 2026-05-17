@@ -3,6 +3,7 @@
 This plan sequences the Android app and Bluetooth bridge work. The architecture
 and rationale live in `docs/android-app-design.md`; this document tracks
 execution order, test gates, and deployment milestones.
+The message passing stack is diagrammed in `docs/android-message-stack.md`.
 
 The bias is local-first development: most protocol, bridge, and app behavior
 should be testable without Bluetooth hardware. Real Pi and Android phone tests
@@ -156,36 +157,36 @@ Exit criteria:
   oversized messages.
 - Fixture format is stable enough for Android tests to consume.
 
-## Phase 2: `mba-bt` Local Bridge
+## Phase 2: `mba-bt` Local Request Router
 
-- [ ] Add `crates/mba-bt`.
-- [ ] Add `mba-bt` to the workspace.
-- [ ] Implement transport trait or equivalent message abstraction.
-- [ ] Implement in-memory transport tests.
-- [ ] Implement local framed protocol read/write for TCP/stdin dev tools.
-- [ ] Implement BLE chunk/reassembly transport tests.
-- [ ] Implement `system.hello`.
-- [ ] Implement `system.snapshot`.
-- [ ] Implement event subscription plumbing with fake events.
-- [ ] Implement one-active-client gate.
-- [ ] Implement structured `busy` response for a second client.
-- [ ] Add fake `mba-player` backend.
-- [ ] Add local protocol exerciser command.
-- [ ] Add tests for:
-  - [ ] connect/disconnect cleanup
-  - [ ] auth-required response
-  - [ ] busy response
-  - [ ] player unavailable response
-  - [ ] malformed chunk/message handling
-  - [ ] unsupported method response
-  - [ ] event delivery to subscribed client
+- [x] Add `crates/mba-bt`.
+- [x] Add `mba-bt` to the workspace.
+- [x] Implement transport trait or equivalent message abstraction.
+- [x] Implement in-memory transport tests.
+- [x] Implement local framed protocol read/write for stdio dev tools.
+- [x] Implement BLE chunk/reassembly transport tests.
+- [x] Implement `system.hello`.
+- [x] Implement `system.snapshot`.
+- [x] Implement event subscription plumbing with fake events.
+- [x] Implement one-active-client gate.
+- [x] Implement structured `busy` response for a second client.
+- [x] Add fake `mba-player` backend.
+- [x] Add local protocol exerciser command.
+- [x] Add tests for:
+  - [x] connect/disconnect cleanup
+  - [x] auth-required response
+  - [x] busy response
+  - [x] player unavailable response
+  - [x] malformed chunk/message handling
+  - [x] unsupported method response
+  - [x] event delivery to subscribed client
 
 Exit criteria:
 
 - `cargo test -p mba-bt` passes without Bluetooth hardware.
 - A local developer tool can send framed requests and receive framed responses.
-- The same bridge logic can run through an in-memory BLE-chunked transport.
-- The bridge can be tested against a fake player backend.
+- The same router logic can run through an in-memory BLE-chunked transport.
+- The router can be tested against a fake player backend.
 
 ## Phase 3: BlueZ BLE GATT Integration
 

@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/mba-bt",
     "crates/mba-cli",
     "crates/mba-device",
     "crates/mba-player",
