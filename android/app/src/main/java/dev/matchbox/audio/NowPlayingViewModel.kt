@@ -23,12 +23,48 @@ class NowPlayingViewModel(
         }
     }
 
+    fun play() {
+        runPlaybackCommand(PlaybackCommand.Play)
+    }
+
+    fun pause() {
+        runPlaybackCommand(PlaybackCommand.Pause)
+    }
+
+    fun stop() {
+        runPlaybackCommand(PlaybackCommand.Stop)
+    }
+
+    fun next() {
+        runPlaybackCommand(PlaybackCommand.Next)
+    }
+
+    fun previous() {
+        runPlaybackCommand(PlaybackCommand.Previous)
+    }
+
     suspend fun loadSnapshot() {
         uiState = NowPlayingUiState(loading = true)
         uiState = try {
             NowPlayingUiState.ready(transport.requestSnapshot())
         } catch (error: Exception) {
             NowPlayingUiState.failed(error.message ?: "Snapshot request failed")
+        }
+    }
+
+    suspend fun sendPlaybackCommand(command: PlaybackCommand) {
+        uiState = uiState.copy(error = null)
+        uiState = try {
+            transport.sendPlaybackCommand(command)
+            NowPlayingUiState.ready(transport.requestSnapshot())
+        } catch (error: Exception) {
+            NowPlayingUiState.failed(error.message ?: "Playback command failed")
+        }
+    }
+
+    private fun runPlaybackCommand(command: PlaybackCommand) {
+        viewModelScope.launch {
+            sendPlaybackCommand(command)
         }
     }
 }

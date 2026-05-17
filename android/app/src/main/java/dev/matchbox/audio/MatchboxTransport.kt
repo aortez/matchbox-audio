@@ -2,12 +2,44 @@ package dev.matchbox.audio
 
 interface MatchboxTransport {
     suspend fun requestSnapshot(): DeviceSnapshot
+    suspend fun sendPlaybackCommand(command: PlaybackCommand)
 }
 
 class FakeMatchboxTransport(
-    private val snapshot: DeviceSnapshot = FakeSnapshots.nowPlaying,
+    snapshot: DeviceSnapshot = FakeSnapshots.nowPlaying,
 ) : MatchboxTransport {
+    private var snapshot: DeviceSnapshot = snapshot
+
+    val playbackCommands = mutableListOf<PlaybackCommand>()
+
     override suspend fun requestSnapshot(): DeviceSnapshot = snapshot
+
+    override suspend fun sendPlaybackCommand(command: PlaybackCommand) {
+        playbackCommands.add(command)
+        snapshot = snapshot.copy(
+            playback = snapshot.playback.copy(
+                state = when (command) {
+                    PlaybackCommand.Play -> "play"
+                    PlaybackCommand.Pause -> "pause"
+                    PlaybackCommand.Toggle ->
+                        if (snapshot.playback.state == "play") "pause" else "play"
+                    PlaybackCommand.Stop -> "stop"
+                    PlaybackCommand.Next,
+                    PlaybackCommand.Previous,
+                    -> snapshot.playback.state
+                },
+            ),
+        )
+    }
+}
+
+enum class PlaybackCommand(val method: String) {
+    Play("playback.play"),
+    Pause("playback.pause"),
+    Toggle("playback.toggle"),
+    Stop("playback.stop"),
+    Next("playback.next"),
+    Previous("playback.previous"),
 }
 
 object FakeSnapshots {

@@ -6,6 +6,8 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 
@@ -26,6 +28,55 @@ class NowPlayingScreenTest {
         compose.onNodeWithText("Speak to Me").assertIsDisplayed()
         compose.onNodeWithText("Pink Floyd").assertIsDisplayed()
         compose.onNodeWithText("3 / 12").assertIsDisplayed()
+    }
+
+    @Test
+    fun readyStateShowsPlaybackControls() {
+        var previousClicks = 0
+        var pauseClicks = 0
+        var nextClicks = 0
+        var stopClicks = 0
+
+        compose.setContent {
+            NowPlayingScreen(
+                state = NowPlayingUiState.ready(FakeSnapshots.nowPlaying),
+                onRefresh = {},
+                onPrevious = { previousClicks += 1 },
+                onPause = { pauseClicks += 1 },
+                onNext = { nextClicks += 1 },
+                onStop = { stopClicks += 1 },
+            )
+        }
+
+        compose.onNodeWithText("Previous").performClick()
+        compose.onNodeWithText("Pause").performClick()
+        compose.onNodeWithText("Next").performClick()
+        compose.onNodeWithText("Stop").performClick()
+
+        assertEquals(1, previousClicks)
+        assertEquals(1, pauseClicks)
+        assertEquals(1, nextClicks)
+        assertEquals(1, stopClicks)
+    }
+
+    @Test
+    fun pausedStateShowsPlayControl() {
+        var playClicks = 0
+        val pausedSnapshot = FakeSnapshots.nowPlaying.copy(
+            playback = FakeSnapshots.nowPlaying.playback.copy(state = "pause"),
+        )
+
+        compose.setContent {
+            NowPlayingScreen(
+                state = NowPlayingUiState.ready(pausedSnapshot),
+                onRefresh = {},
+                onPlay = { playClicks += 1 },
+            )
+        }
+
+        compose.onNodeWithText("Play").performClick()
+
+        assertEquals(1, playClicks)
     }
 
     @Test

@@ -29,6 +29,10 @@ class NowPlayingViewModelTest {
                 override suspend fun requestSnapshot(): DeviceSnapshot {
                     error("offline")
                 }
+
+                override suspend fun sendPlaybackCommand(command: PlaybackCommand) {
+                    error("offline")
+                }
             },
         )
 
@@ -37,6 +41,40 @@ class NowPlayingViewModelTest {
         val state = viewModel.uiState
         assertFalse(state.loading)
         assertEquals("offline", state.error)
+        assertTrue(state.device == null)
+    }
+
+    @Test
+    fun sendPlaybackCommandSendsCommandAndRefreshesSnapshot() = runTest {
+        val transport = FakeMatchboxTransport(FakeSnapshots.nowPlaying)
+        val viewModel = NowPlayingViewModel(transport)
+
+        viewModel.sendPlaybackCommand(PlaybackCommand.Pause)
+
+        assertEquals(listOf(PlaybackCommand.Pause), transport.playbackCommands)
+        val state = viewModel.uiState
+        assertFalse(state.loading)
+        assertNull(state.error)
+        assertEquals("pause", state.device?.playback?.state)
+    }
+
+    @Test
+    fun sendPlaybackCommandMapsFailureIntoErrorState() = runTest {
+        val viewModel = NowPlayingViewModel(
+            object : MatchboxTransport {
+                override suspend fun requestSnapshot(): DeviceSnapshot = FakeSnapshots.nowPlaying
+
+                override suspend fun sendPlaybackCommand(command: PlaybackCommand) {
+                    error("command failed")
+                }
+            },
+        )
+
+        viewModel.sendPlaybackCommand(PlaybackCommand.Next)
+
+        val state = viewModel.uiState
+        assertFalse(state.loading)
+        assertEquals("command failed", state.error)
         assertTrue(state.device == null)
     }
 }

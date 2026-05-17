@@ -20,6 +20,30 @@ const DEFAULT_PLAYER_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub trait PlayerBackend: Clone + Send + Sync + 'static {
     fn snapshot(&self) -> BoxFuture<'_, PlayerResult<StatusResponse>>;
+    fn playback_command(&self, command: PlaybackCommand) -> BoxFuture<'_, PlayerResult<()>>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaybackCommand {
+    Play,
+    Pause,
+    Toggle,
+    Stop,
+    Next,
+    Previous,
+}
+
+impl PlaybackCommand {
+    fn endpoint(self) -> &'static str {
+        match self {
+            Self::Play => "play",
+            Self::Pause => "pause",
+            Self::Toggle => "toggle",
+            Self::Stop => "stop",
+            Self::Next => "next",
+            Self::Previous => "previous",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +86,13 @@ impl PlayerBackend for MatchboxPlayerBackend {
             Self::Http(backend) => backend.snapshot(),
         }
     }
+
+    fn playback_command(&self, command: PlaybackCommand) -> BoxFuture<'_, PlayerResult<()>> {
+        match self {
+            Self::Fake(backend) => backend.playback_command(command),
+            Self::Http(backend) => backend.playback_command(command),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -87,6 +118,12 @@ impl HttpPlayerBackend {
             .join("api/v1/status")
             .map_err(|error| PlayerError::Internal(format!("invalid player status URL: {error}")))
     }
+
+    fn playback_url(&self, command: PlaybackCommand) -> PlayerResult<Url> {
+        self.base_url
+            .join(&format!("api/v1/playback/{}", command.endpoint()))
+            .map_err(|error| PlayerError::Internal(format!("invalid player playback URL: {error}")))
+    }
 }
 
 impl PlayerBackend for HttpPlayerBackend {
@@ -109,10 +146,42 @@ impl PlayerBackend for HttpPlayerBackend {
             })
         })
     }
+
+    fn playback_command(&self, command: PlaybackCommand) -> BoxFuture<'_, PlayerResult<()>> {
+        Box::pin(async move {
+            let url = self.playback_url(command)?;
+            let response = self
+                .client
+                .post(url.clone())
+                .send()
+                .await
+                .map_err(|error| {
+                    PlayerError::Unavailable(format!(
+                        "failed to query mba-player at {url}: {error}"
+                    ))
+                })?;
+
+            let status = response.status();
+            if !status.is_success() {
+                return Err(player_command_error(status, url.as_str()));
+            }
+
+            Ok(())
+        })
+    }
 }
 
 fn player_status_error(status: StatusCode, url: &str) -> PlayerError {
     let message = format!("mba-player status request to {url} returned HTTP {status}");
+    if status.is_server_error() {
+        PlayerError::Unavailable(message)
+    } else {
+        PlayerError::Internal(message)
+    }
+}
+
+fn player_command_error(status: StatusCode, url: &str) -> PlayerError {
+    let message = format!("mba-player playback request to {url} returned HTTP {status}");
     if status.is_server_error() {
         PlayerError::Unavailable(message)
     } else {
@@ -155,6 +224,29 @@ impl PlayerBackend for FakePlayerBackend {
                 .expect("fake player mutex")
                 .snapshot
                 .clone()
+        })
+    }
+
+    fn playback_command(&self, command: PlaybackCommand) -> BoxFuture<'_, PlayerResult<()>> {
+        Box::pin(async move {
+            let mut state = self.state.lock().expect("fake player mutex");
+            let snapshot = state.snapshot.as_mut().map_err(|error| error.clone())?;
+            let Some(playback) = snapshot.playback.as_mut() else {
+                return Ok(());
+            };
+            match command {
+                PlaybackCommand::Play => playback.state = PlaybackState::Play,
+                PlaybackCommand::Pause => playback.state = PlaybackState::Pause,
+                PlaybackCommand::Toggle => {
+                    playback.state = match playback.state {
+                        PlaybackState::Play => PlaybackState::Pause,
+                        PlaybackState::Pause | PlaybackState::Stop => PlaybackState::Play,
+                    };
+                }
+                PlaybackCommand::Stop => playback.state = PlaybackState::Stop,
+                PlaybackCommand::Next | PlaybackCommand::Previous => {}
+            }
+            Ok(())
         })
     }
 }
@@ -222,6 +314,35 @@ mod tests {
 
         assert_eq!(snapshot, expected);
         assert_eq!(server.request_path(), "/api/v1/status");
+    }
+
+    #[tokio::test]
+    async fn http_player_backend_posts_playback_command() {
+        let server = TestHttpServer::responding_with(StatusCode::ACCEPTED, b"{}".to_vec());
+        let backend = HttpPlayerBackend::new(server.base_url()).expect("backend builds");
+
+        backend
+            .playback_command(PlaybackCommand::Next)
+            .await
+            .expect("command succeeds");
+
+        assert_eq!(server.request_path(), "/api/v1/playback/next");
+    }
+
+    #[tokio::test]
+    async fn fake_player_backend_updates_playback_state() {
+        let backend = FakePlayerBackend::ready();
+
+        backend
+            .playback_command(PlaybackCommand::Pause)
+            .await
+            .expect("pause succeeds");
+
+        let snapshot = backend.snapshot().await.expect("snapshot succeeds");
+        assert_eq!(
+            snapshot.playback.expect("playback").state,
+            PlaybackState::Pause
+        );
     }
 
     #[tokio::test]

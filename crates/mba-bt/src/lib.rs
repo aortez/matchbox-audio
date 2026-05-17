@@ -20,13 +20,13 @@ pub use state::*;
 mod tests {
     use mba_protocol::{
         ble, ChunkReassembler, ErrorCode, ProtocolMessage, METHOD_EVENTS_SUBSCRIBE,
-        METHOD_SYSTEM_HELLO, METHOD_SYSTEM_SNAPSHOT,
+        METHOD_PLAYBACK_PAUSE, METHOD_PLAYBACK_PLAY, METHOD_SYSTEM_HELLO, METHOD_SYSTEM_SNAPSHOT,
     };
     use serde_json::{json, Value};
 
     use crate::{
-        encode_frame, FakePlayerBackend, FrameDecoder, InMemoryBleTransport, RequestRouter,
-        SessionGate,
+        encode_frame, FakePlayerBackend, FrameDecoder, InMemoryBleTransport, PlayerBackend,
+        RequestRouter, SessionGate,
     };
 
     fn hello_request(id: u64) -> ProtocolMessage {
@@ -102,9 +102,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn request_router_handles_playback_commands() {
+        let player = FakePlayerBackend::ready();
+        let router = RequestRouter::new(player.clone());
+        let request = ProtocolMessage::request(3, METHOD_PLAYBACK_PAUSE, None);
+
+        let result = response_result(route_one(&router, request).await);
+
+        assert_eq!(result["accepted"], true);
+        let snapshot = player.snapshot().await.expect("snapshot succeeds");
+        assert_eq!(
+            snapshot.playback.expect("playback").state,
+            mba_protocol::PlaybackState::Pause
+        );
+    }
+
+    #[tokio::test]
+    async fn request_router_requires_trust_for_playback_commands() {
+        let router = RequestRouter::new(FakePlayerBackend::ready()).with_trusted_client(false);
+        let request = ProtocolMessage::request(4, METHOD_PLAYBACK_PLAY, None);
+
+        let code = response_error_code(route_one(&router, request).await);
+
+        assert_eq!(code, ErrorCode::AuthRequired);
+    }
+
+    #[tokio::test]
     async fn request_router_rejects_unsupported_method() {
         let router = RequestRouter::new(FakePlayerBackend::ready());
-        let request = ProtocolMessage::request(3, "debug.noop", None);
+        let request = ProtocolMessage::request(5, "debug.noop", None);
 
         let code = response_error_code(route_one(&router, request).await);
 
@@ -114,7 +140,7 @@ mod tests {
     #[tokio::test]
     async fn request_router_returns_auth_required_for_untrusted_control() {
         let router = RequestRouter::new(FakePlayerBackend::ready()).with_trusted_client(false);
-        let request = ProtocolMessage::request(4, METHOD_SYSTEM_SNAPSHOT, None);
+        let request = ProtocolMessage::request(6, METHOD_SYSTEM_SNAPSHOT, None);
 
         let code = response_error_code(route_one(&router, request).await);
 
@@ -124,7 +150,7 @@ mod tests {
     #[tokio::test]
     async fn request_router_reports_player_unavailable() {
         let router = RequestRouter::new(FakePlayerBackend::unavailable("mpd offline"));
-        let request = ProtocolMessage::request(5, METHOD_SYSTEM_SNAPSHOT, None);
+        let request = ProtocolMessage::request(7, METHOD_SYSTEM_SNAPSHOT, None);
 
         let code = response_error_code(route_one(&router, request).await);
 
@@ -134,7 +160,7 @@ mod tests {
     #[tokio::test]
     async fn request_router_delivers_fake_event_after_subscribe() {
         let router = RequestRouter::new(FakePlayerBackend::ready());
-        let request = ProtocolMessage::request(6, METHOD_EVENTS_SUBSCRIBE, None);
+        let request = ProtocolMessage::request(8, METHOD_EVENTS_SUBSCRIBE, None);
 
         let messages = router.route(request).await.messages();
 

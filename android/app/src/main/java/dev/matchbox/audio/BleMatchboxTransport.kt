@@ -132,6 +132,12 @@ class BleMatchboxTransport(
         return ProtocolParser.parseSnapshotResponse(response)
     }
 
+    override suspend fun sendPlaybackCommand(command: PlaybackCommand) {
+        ensureConnected()
+        ensureHello()
+        sendRequest(command.method)
+    }
+
     private suspend fun ensureConnected() {
         withContext(mainDispatcher) {
             when (_connectionState.value.phase) {

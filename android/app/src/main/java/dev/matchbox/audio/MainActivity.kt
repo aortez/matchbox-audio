@@ -97,6 +97,11 @@ fun MatchboxApp(
                 bleConnectionState = bleState,
                 permissionDenied = permissionDenied,
                 onRefresh = viewModel::refresh,
+                onPlay = viewModel::play,
+                onPause = viewModel::pause,
+                onStop = viewModel::stop,
+                onNext = viewModel::next,
+                onPrevious = viewModel::previous,
                 onConnectBle = {
                     val missingPermissions = missingBlePermissions(context)
                     if (missingPermissions.isEmpty()) {
@@ -131,6 +136,11 @@ fun NowPlayingScreen(
     permissionDenied: Boolean = false,
     onConnectBle: () -> Unit = {},
     onUseDemo: () -> Unit = {},
+    onPlay: () -> Unit = {},
+    onPause: () -> Unit = {},
+    onStop: () -> Unit = {},
+    onNext: () -> Unit = {},
+    onPrevious: () -> Unit = {},
 ) {
     Column(
         modifier = modifier
@@ -204,7 +214,14 @@ fun NowPlayingScreen(
                 style = MaterialTheme.typography.bodyLarge,
             )
 
-            state.device != null -> NowPlayingContent(state.device)
+            state.device != null -> NowPlayingContent(
+                device = state.device,
+                onPlay = onPlay,
+                onPause = onPause,
+                onStop = onStop,
+                onNext = onNext,
+                onPrevious = onPrevious,
+            )
         }
     }
 }
@@ -266,9 +283,18 @@ private fun ConnectionStatusRow(
 }
 
 @Composable
-private fun NowPlayingContent(device: DeviceSnapshot) {
+private fun NowPlayingContent(
+    device: DeviceSnapshot,
+    onPlay: () -> Unit,
+    onPause: () -> Unit,
+    onStop: () -> Unit,
+    onNext: () -> Unit,
+    onPrevious: () -> Unit,
+) {
     val playback = device.playback
     val track = playback.track
+    val playPauseLabel = if (playback.state == "play") "Pause" else "Play"
+    val onPlayPause = if (playback.state == "play") onPause else onPlay
 
     Column(
         modifier = Modifier
@@ -281,6 +307,42 @@ private fun NowPlayingContent(device: DeviceSnapshot) {
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary,
         )
+
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedButton(
+                    onClick = onPrevious,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Previous")
+                }
+                Button(
+                    onClick = onPlayPause,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(playPauseLabel)
+                }
+                OutlinedButton(
+                    onClick = onNext,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Next")
+                }
+            }
+            OutlinedButton(
+                onClick = onStop,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Stop")
+            }
+        }
+
         Text(
             text = track?.displayTitle ?: "No track",
             style = MaterialTheme.typography.headlineSmall,

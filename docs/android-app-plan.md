@@ -508,6 +508,16 @@ Phase 6 reconnect-backoff status:
   `matchbox-audio.local`: real BLE smoke still matched the Pi snapshot, app
   restart reconnect, and lock/unlock reconnect paths.
 
+Phase 6 closeout decision:
+
+- Bench validation now covers the real Pi, real Android phones, real BLE GATT,
+  the real player backend, and real audio output through headphones.
+- Phone-to-car Bluetooth audio/call coexistence remains a useful real-car field
+  validation item, but it does not block starting core Android player controls.
+  The matching Phase 9 item remains open.
+- RFCOMM stays a contingency only. We are not spending engineering time on a
+  fallback spike unless BLE fails field validation.
+
 ## Phase 6: Android BLE Connection
 
 - [x] Add BLE scan/association flow.
@@ -527,8 +537,8 @@ Phase 6 reconnect-backoff status:
 - [x] Add real Pi plus Android app BLE smoke helper.
 - [x] Verify app reconnects after app process restart.
 - [x] Verify app reconnects after phone lock/unlock.
-- [ ] Verify app behavior while phone is connected to car Bluetooth audio.
-- [ ] Decide whether RFCOMM fallback still needs a spike.
+- [x] Defer car Bluetooth audio coexistence validation to Phase 9 field checks.
+- [x] Decide whether RFCOMM fallback still needs a spike: no active spike for now.
 - [ ] Add host-to-phone BLE instrumented smoke test against
   `mba-bt --ble-local`.
 
@@ -540,19 +550,30 @@ Exit criteria:
 
 ## Phase 7: Core Player Workflows
 
+Phase 7 playback-control first-slice status:
+
+- `mba-bt` now routes `playback.play`, `playback.pause`, `playback.toggle`,
+  `playback.stop`, `playback.next`, and `playback.previous` to the local
+  `mba-player` HTTP API.
+- Android now exposes Previous, Play/Pause, Next, and Stop controls on the
+  now-playing screen. Each command sends a BLE protocol request and refreshes
+  `system.snapshot` afterward.
+- Fake transports on both Rust and Android update playback state for tests and
+  local UI development.
+
 - [ ] Now-playing screen:
-  - [ ] playback state
-  - [ ] track title/path
-  - [ ] artist/album when available
+  - [x] playback state
+  - [x] track title/path
+  - [x] artist/album when available
   - [ ] elapsed/duration
-  - [ ] volume
+  - [x] volume
 - [ ] Playback controls:
-  - [ ] play
-  - [ ] pause
-  - [ ] toggle
-  - [ ] stop
-  - [ ] next
-  - [ ] previous
+  - [x] play
+  - [x] pause
+  - [x] toggle protocol route
+  - [x] stop
+  - [x] next
+  - [x] previous
   - [ ] seek
   - [ ] volume set
 - [ ] Library screen:

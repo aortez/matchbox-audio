@@ -1,13 +1,14 @@
 use mba_protocol::{
     select_protocol_version, ErrorCode, HelloParams, HelloResult, PairingInfo, PairingState,
     ProtocolError, ProtocolMessage, RequestId, SnapshotResult, TransportInfo,
-    CAPABILITY_BLE_CHUNK_V1, EVENT_PLAYBACK_CHANGED, METHOD_EVENTS_SUBSCRIBE, METHOD_SYSTEM_HELLO,
-    METHOD_SYSTEM_SNAPSHOT,
+    CAPABILITY_BLE_CHUNK_V1, EVENT_PLAYBACK_CHANGED, METHOD_EVENTS_SUBSCRIBE, METHOD_PLAYBACK_NEXT,
+    METHOD_PLAYBACK_PAUSE, METHOD_PLAYBACK_PLAY, METHOD_PLAYBACK_PREVIOUS, METHOD_PLAYBACK_STOP,
+    METHOD_PLAYBACK_TOGGLE, METHOD_SYSTEM_HELLO, METHOD_SYSTEM_SNAPSHOT,
 };
 use serde_json::{json, Value};
 use tracing::info;
 
-use crate::{PlayerBackend, PlayerError};
+use crate::{PlaybackCommand, PlayerBackend, PlayerError};
 
 #[derive(Debug, Clone)]
 pub struct RequestRouter<P> {
@@ -80,6 +81,12 @@ where
             )),
             METHOD_SYSTEM_SNAPSHOT => self.system_snapshot(id).await,
             METHOD_EVENTS_SUBSCRIBE => self.events_subscribe(id).await,
+            METHOD_PLAYBACK_PLAY => self.playback_command(id, PlaybackCommand::Play).await,
+            METHOD_PLAYBACK_PAUSE => self.playback_command(id, PlaybackCommand::Pause).await,
+            METHOD_PLAYBACK_TOGGLE => self.playback_command(id, PlaybackCommand::Toggle).await,
+            METHOD_PLAYBACK_STOP => self.playback_command(id, PlaybackCommand::Stop).await,
+            METHOD_PLAYBACK_NEXT => self.playback_command(id, PlaybackCommand::Next).await,
+            METHOD_PLAYBACK_PREVIOUS => self.playback_command(id, PlaybackCommand::Previous).await,
             _ => RouteOutput::single(ProtocolMessage::error_response(
                 id,
                 ProtocolError::new(
@@ -128,6 +135,12 @@ where
                 METHOD_SYSTEM_HELLO.to_string(),
                 METHOD_SYSTEM_SNAPSHOT.to_string(),
                 METHOD_EVENTS_SUBSCRIBE.to_string(),
+                METHOD_PLAYBACK_PLAY.to_string(),
+                METHOD_PLAYBACK_PAUSE.to_string(),
+                METHOD_PLAYBACK_TOGGLE.to_string(),
+                METHOD_PLAYBACK_STOP.to_string(),
+                METHOD_PLAYBACK_NEXT.to_string(),
+                METHOD_PLAYBACK_PREVIOUS.to_string(),
                 CAPABILITY_BLE_CHUNK_V1.to_string(),
             ],
             transport: TransportInfo::ble_gatt_default(),
@@ -147,6 +160,19 @@ where
     async fn system_snapshot(&self, id: RequestId) -> RouteOutput {
         match self.player.snapshot().await {
             Ok(status) => RouteOutput::single(success_response(id, SnapshotResult { status })),
+            Err(error) => RouteOutput::single(ProtocolMessage::error_response(
+                id,
+                protocol_error_for_player_error(error),
+            )),
+        }
+    }
+
+    async fn playback_command(&self, id: RequestId, command: PlaybackCommand) -> RouteOutput {
+        match self.player.playback_command(command).await {
+            Ok(()) => RouteOutput::single(ProtocolMessage::ok_response(
+                id,
+                Some(json!({ "accepted": true })),
+            )),
             Err(error) => RouteOutput::single(ProtocolMessage::error_response(
                 id,
                 protocol_error_for_player_error(error),
