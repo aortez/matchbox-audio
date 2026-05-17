@@ -90,6 +90,8 @@ Options:
   --skip-install       Do not run ./gradlew installDebug first
   --no-restart-check   Skip force-stop/relaunch reconnect verification
   --no-lock-check      Skip screen lock/unlock verification
+  --playback-control-check
+                      Tap Pause/Play in the Android app and verify Pi playback state.
   --lock-duration <ms> How long to leave the phone asleep (default: ${DEFAULT_LOCK_DURATION_MS})
   --output <path>      Screenshot output path (default: ${DEFAULT_OUTPUT})
   --timeout <ms>       BLE/UI wait timeout (default: ${DEFAULT_TIMEOUT_MS})
@@ -456,6 +458,20 @@ function maybeTapText(serial, text) {
   return true;
 }
 
+async function tapTextWhenVisible(serial, text, timeoutMs) {
+  const match = await waitForText(serial, [text], timeoutMs);
+  if (!match) {
+    throw new Error(`Timed out waiting for Android UI text to tap: ${text}`);
+  }
+
+  const point = findTextCenter(match.xml, text);
+  if (!point) {
+    throw new Error(`Could not find ${text} bounds after it became visible`);
+  }
+
+  adb(serial, 'shell', 'input', 'tap', String(point.x), String(point.y));
+}
+
 async function waitForText(serial, expected, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
 
@@ -612,6 +628,76 @@ async function expectedFromPi(baseUrl) {
   return expectedUiValues(status);
 }
 
+function playbackState(status) {
+  return status.playback?.state ? String(status.playback.state).toLowerCase() : '';
+}
+
+async function waitForPiPlaybackState(baseUrl, expectedState, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let lastState = '';
+
+  while (Date.now() < deadline) {
+    const status = await piStatus(baseUrl);
+    lastState = playbackState(status);
+    if (lastState === expectedState) {
+      return status;
+    }
+    await sleep(500);
+  }
+
+  throw new Error(
+    `Timed out waiting for Pi playback_state: ${expectedState}; last state: ${lastState || 'unknown'}`,
+  );
+}
+
+async function restorePlaybackIfNeeded(baseUrl, remoteTarget, originalState, timeoutMs) {
+  if (!['play', 'pause', 'stop'].includes(originalState)) {
+    return;
+  }
+
+  try {
+    const current = await piStatus(baseUrl);
+    if (playbackState(current) === originalState) {
+      return;
+    }
+
+    info(`Restoring Pi playback_state to ${originalState}`);
+    ssh(remoteTarget, `mba-cli ${originalState}`);
+    await waitForPiPlaybackState(baseUrl, originalState, timeoutMs);
+    success(`Pi playback_state restored to ${originalState}`);
+  } catch (error) {
+    fail(`Playback restore failed: ${error.message}`);
+  }
+}
+
+async function runPlaybackControlCheck(serial, baseUrl, remoteTarget, timeoutMs) {
+  const initialStatus = await piStatus(baseUrl);
+  const initialState = playbackState(initialStatus);
+
+  if (initialState !== 'play') {
+    throw new Error(
+      `Playback control check requires Pi playback_state: play; current state: ${initialState || 'unknown'}`,
+    );
+  }
+
+  try {
+    info('Tapping Android Pause and waiting for Pi playback_state: pause');
+    await tapTextWhenVisible(serial, 'Pause', timeoutMs);
+    const pausedStatus = await waitForPiPlaybackState(baseUrl, 'pause', timeoutMs);
+    await waitForAndroidValues(serial, expectedUiValues(pausedStatus), timeoutMs);
+    success('Android Pause control changed Pi playback_state to pause');
+
+    info('Tapping Android Play and waiting for Pi playback_state: play');
+    await tapTextWhenVisible(serial, 'Play', timeoutMs);
+    const playingStatus = await waitForPiPlaybackState(baseUrl, 'play', timeoutMs);
+    await waitForAndroidValues(serial, expectedUiValues(playingStatus), timeoutMs);
+    success('Android Play control changed Pi playback_state to play');
+    return playingStatus;
+  } finally {
+    await restorePlaybackIfNeeded(baseUrl, remoteTarget, initialState, timeoutMs);
+  }
+}
+
 function preparePhone(serial, appId) {
   wakePhone(serial);
   adbAllowFailure(serial, 'shell', 'pm', 'grant', appId, 'android.permission.BLUETOOTH_SCAN');
@@ -639,6 +725,7 @@ async function main() {
   const skipInstall = flag(args, '--skip-install');
   const restartCheck = !flag(args, '--no-restart-check');
   const lockCheck = !flag(args, '--no-lock-check');
+  const playbackControlCheck = flag(args, '--playback-control-check');
   const lockDurationMs = Number(argValue(args, '--lock-duration', String(DEFAULT_LOCK_DURATION_MS)));
   const output = argValue(args, '--output', DEFAULT_OUTPUT);
   const timeoutMs = Number(argValue(args, '--timeout', String(DEFAULT_TIMEOUT_MS)));
@@ -718,6 +805,13 @@ async function main() {
   success('Pi BLE reports the Android app as the active session');
   await waitForKnownDeviceStored(deviceSerial, appId, timeoutMs);
   success('Android app stored known BLE device');
+
+  if (playbackControlCheck) {
+    info('Running Android BLE playback-control check');
+    const status = await runPlaybackControlCheck(deviceSerial, baseUrl, remoteTarget, timeoutMs);
+    expected = expectedUiValues(status);
+    success('Android BLE playback-control check passed');
+  }
 
   if (restartCheck) {
     info('Force-stopping Android app for reconnect check');

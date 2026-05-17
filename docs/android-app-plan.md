@@ -560,6 +560,15 @@ Phase 7 playback-control first-slice status:
   `system.snapshot` afterward.
 - Fake transports on both Rust and Android update playback state for tests and
   local UI development.
+- `tools/android-real-ble-smoke.mjs --playback-control-check` now exercises the
+  least-disruptive real control path by tapping Android Pause, verifying Pi
+  `playback_state: pause`, tapping Android Play, and verifying
+  `playback_state: play`.
+- Validated on May 17, 2026 PDT with the Pixel 7 Pro and
+  `matchbox-audio.local`: the control-enabled real BLE smoke passed Pause/Play,
+  app restart reconnect, and lock/unlock reconnect.
+- Manual bench validation on the same setup also covered Play, Pause, Previous,
+  and Next from the Android app against the real Pi/player path.
 
 - [ ] Now-playing screen:
   - [x] playback state

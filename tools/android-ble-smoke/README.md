@@ -78,6 +78,12 @@ session; the main `--serial` phone then attempts to connect and must show
 **Device busy**. If exactly two phones are attached, `--serial` can be inferred
 from the non-holder device.
 
+Use `--playback-control-check` to opt into the disruptive part of the real
+hardware smoke: after the app connects, the helper taps **Pause**, verifies the
+Pi reports `playback_state: pause`, taps **Play**, verifies
+`playback_state: play`, and restores playback with `mba-cli play` if the check
+fails while audio is paused.
+
 Use `--no-restart-check` to skip the force-stop/relaunch reconnect pass.
 Use `--no-lock-check` to skip the screen lock/unlock pass.
 Use `--skip-install` when the current APK is already installed.
