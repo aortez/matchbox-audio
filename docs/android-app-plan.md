@@ -471,7 +471,13 @@ Phase 6 busy-device status:
   requests with `Another app is connected`, and lets a later refresh retry.
 - The real BLE smoke helper now also verifies that the Pi reports `busy: true`
   while the Android app owns the active BLE session. A full second-client busy
-  smoke still needs either a second phone or a separate host BLE central.
+  smoke can run with `--holder-serial <serial>` when a second USB-debuggable
+  phone is attached.
+- Validated on May 16, 2026 PDT with CPH2515 as the holder phone and Pixel 7 Pro
+  as the test phone: the holder owned the BLE session, the Pixel showed
+  `Device busy` / `Another app is connected`, cleanup returned `mba-bt` to
+  idle, and the normal Pixel reconnect plus lock/unlock smoke completed after
+  the busy-device check.
 
 ## Phase 6: Android BLE Connection
 

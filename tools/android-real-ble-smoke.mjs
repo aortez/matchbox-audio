@@ -82,6 +82,7 @@ Options:
   --target <host>      Alias for --host
   --user <user>        SSH user (default: ${DEFAULT_USER})
   --serial <serial>    ADB device serial. Required if multiple devices are attached.
+  --holder-serial <s>  Optional first phone that holds BLE for busy-device check.
   --app-id <id>        Android app id (default: ${DEFAULT_APP_ID})
   --activity <name>    Activity component (default: ${DEFAULT_ACTIVITY})
   --app-dir <path>     Android Gradle project dir (default: android/)
@@ -177,6 +178,10 @@ function adbAllowFailure(serial, ...args) {
   return run('adb', adbArgs, { allowFailure: true, timeout: 30_000 });
 }
 
+function installApk(serial, apkPath) {
+  adb(serial, 'install', '-r', apkPath);
+}
+
 function forceStopApp(serial, appId) {
   adbAllowFailure(serial, 'shell', 'am', 'force-stop', appId);
 }
@@ -205,9 +210,9 @@ async function sleep(ms) {
   await new Promise(resolveSleep => setTimeout(resolveSleep, ms));
 }
 
-function ensureOneAdbDevice(serial) {
+function adbDeviceSerials() {
   const output = run('adb', ['devices'], { timeout: 10_000 }).stdout;
-  const devices = output
+  return output
     .split('\n')
     .slice(1)
     .map(line => line.trim())
@@ -215,22 +220,57 @@ function ensureOneAdbDevice(serial) {
     .map(line => line.split(/\s+/))
     .filter(([, state]) => state === 'device')
     .map(([deviceSerial]) => deviceSerial);
+}
+
+function ensureAttachedDevice(serial, devices) {
+  if (!devices.includes(serial)) {
+    throw new Error(`ADB device ${serial} is not attached. Attached: ${devices.join(', ') || 'none'}`);
+  }
+  return serial;
+}
+
+function resolveDeviceSerials(serial, holderSerial) {
+  const devices = adbDeviceSerials();
 
   if (serial) {
-    if (!devices.includes(serial)) {
-      throw new Error(`ADB device ${serial} is not attached. Attached: ${devices.join(', ') || 'none'}`);
+    ensureAttachedDevice(serial, devices);
+  }
+
+  if (holderSerial) {
+    ensureAttachedDevice(holderSerial, devices);
+    if (serial) {
+      if (serial === holderSerial) {
+        throw new Error('--serial and --holder-serial must refer to different ADB devices');
+      }
+      return { deviceSerial: serial, holderSerial };
     }
-    return serial;
+
+    const candidates = devices.filter(device => device !== holderSerial);
+    if (candidates.length !== 1) {
+      throw new Error([
+        `Could not infer test phone with --holder-serial ${holderSerial}.`,
+        `Attached devices: ${devices.join(', ') || 'none'}`,
+        'Pass --serial for the phone that should see Device busy.',
+      ].join('\n'));
+    }
+    return { deviceSerial: candidates[0], holderSerial };
+  }
+
+  if (serial) {
+    return { deviceSerial: serial, holderSerial: '' };
   }
 
   if (devices.length !== 1) {
-    throw new Error(`Expected exactly one attached ADB device, found ${devices.length}: ${devices.join(', ') || 'none'}`);
+    throw new Error([
+      `Expected exactly one attached ADB device, found ${devices.length}: ${devices.join(', ') || 'none'}`,
+      'Pass --serial for the phone under test, and optionally --holder-serial for a busy-device check.',
+    ].join('\n'));
   }
 
-  return devices[0];
+  return { deviceSerial: devices[0], holderSerial: '' };
 }
 
-function installDebugApp(appDir, javaHome) {
+function installDebugApp(appDir, javaHome, serials) {
   const gradlew = resolve(appDir, 'gradlew');
   if (!existsSync(gradlew)) {
     throw new Error(`Gradle wrapper not found at ${gradlew}`);
@@ -239,12 +279,20 @@ function installDebugApp(appDir, javaHome) {
   const env = { ...process.env };
   env.JAVA_HOME = javaHome;
 
-  run('./gradlew', ['installDebug'], {
+  run('./gradlew', ['assembleDebug'], {
     cwd: appDir,
     env,
     timeout: 180_000,
     maxBuffer: 8 * 1024 * 1024,
   });
+
+  const apkPath = resolve(appDir, 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk');
+  if (!existsSync(apkPath)) {
+    throw new Error(`Debug APK was not built at ${apkPath}`);
+  }
+  for (const targetSerial of serials) {
+    installApk(targetSerial, apkPath);
+  }
 }
 
 async function piStatus(baseUrl) {
@@ -408,19 +456,44 @@ function maybeTapText(serial, text) {
   return true;
 }
 
-async function waitForAnyAndroidText(serial, expected, timeoutMs) {
+async function waitForText(serial, expected, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    const texts = visibleTexts(dumpUi(serial));
+    const xml = dumpUi(serial);
+    const texts = visibleTexts(xml);
     const match = expected.find(value => texts.includes(value));
     if (match) {
-      return match;
+      return { text: match, xml };
     }
     await sleep(250);
   }
 
   return null;
+}
+
+async function waitForAnyAndroidText(serial, expected, timeoutMs) {
+  const match = await waitForText(serial, expected, timeoutMs);
+  return match?.text || null;
+}
+
+async function connectFromForeground(serial) {
+  const ready = await waitForText(
+    serial,
+    ['Connect BLE', 'BLE ready', 'Device busy'],
+    10_000,
+  );
+  if (!ready) {
+    throw new Error('Timed out waiting for Android app Connect BLE action');
+  }
+
+  if (ready.text == 'Connect BLE') {
+    const point = findTextCenter(ready.xml, 'Connect BLE');
+    if (!point) {
+      throw new Error('Could not find Connect BLE bounds after it became visible');
+    }
+    adb(serial, 'shell', 'input', 'tap', String(point.x), String(point.y));
+  }
 }
 
 async function waitForAndroidValues(serial, expected, timeoutMs) {
@@ -489,8 +562,7 @@ async function waitForKnownDeviceStored(serial, appId, timeoutMs) {
 
 async function launchConnectAndVerify(serial, activity, expected, timeoutMs) {
   adb(serial, 'shell', 'am', 'start', '-n', activity);
-  await sleep(1000);
-  maybeTapText(serial, 'Connect BLE');
+  await connectFromForeground(serial);
   await sleep(250);
   maybeTapText(serial, 'Allow');
   maybeTapText(serial, 'While using the app');
@@ -507,9 +579,27 @@ async function launchConnectAndVerify(serial, activity, expected, timeoutMs) {
   await waitForAndroidValues(serial, expected, timeoutMs);
 }
 
+async function launchConnectExpectBusy(serial, activity, timeoutMs) {
+  adb(serial, 'shell', 'am', 'start', '-n', activity);
+  await connectFromForeground(serial);
+  await sleep(250);
+  maybeTapText(serial, 'Allow');
+  maybeTapText(serial, 'While using the app');
+
+  await waitForAndroidValues(serial, ['Device busy', 'Another app is connected'], timeoutMs);
+}
+
 async function expectedFromPi(baseUrl) {
   const status = await piStatus(baseUrl);
   return expectedUiValues(status);
+}
+
+function preparePhone(serial, appId) {
+  wakePhone(serial);
+  adbAllowFailure(serial, 'shell', 'pm', 'grant', appId, 'android.permission.BLUETOOTH_SCAN');
+  adbAllowFailure(serial, 'shell', 'pm', 'grant', appId, 'android.permission.BLUETOOTH_CONNECT');
+  forceStopApp(serial, appId);
+  forceStopApp(serial, SMOKE_APP_ID);
 }
 
 async function main() {
@@ -523,6 +613,7 @@ async function main() {
   const user = argValue(args, '--user', DEFAULT_USER);
   const remoteTarget = `${user}@${host}`;
   const serial = argValue(args, '--serial', '');
+  const requestedHolderSerial = argValue(args, '--holder-serial', '');
   const appId = argValue(args, '--app-id', DEFAULT_APP_ID);
   const activity = argValue(args, '--activity', `${appId}/.MainActivity`);
   const appDir = resolve(repoRoot, argValue(args, '--app-dir', 'android'));
@@ -549,23 +640,25 @@ async function main() {
   info(`Android app: ${appId}`);
   log('');
 
-  const deviceSerial = ensureOneAdbDevice(serial);
+  const { deviceSerial, holderSerial } = resolveDeviceSerials(serial, requestedHolderSerial);
   success(`ADB device attached: ${deviceSerial}`);
+  if (holderSerial) {
+    success(`ADB holder device attached: ${holderSerial}`);
+  }
 
   if (!skipInstall) {
     const javaHome = detectJavaHome(explicitJavaHome);
     info(`Using JAVA_HOME: ${javaHome}`);
-    info('Installing Android debug app');
-    installDebugApp(appDir, javaHome);
+    info('Building Android debug app');
+    installDebugApp(appDir, javaHome, [deviceSerial, holderSerial].filter(Boolean));
     success('Android debug app installed');
   }
 
   info('Preparing phone and clearing previous BLE sessions');
-  wakePhone(deviceSerial);
-  adbAllowFailure(deviceSerial, 'shell', 'pm', 'grant', appId, 'android.permission.BLUETOOTH_SCAN');
-  adbAllowFailure(deviceSerial, 'shell', 'pm', 'grant', appId, 'android.permission.BLUETOOTH_CONNECT');
-  forceStopApp(deviceSerial, appId);
-  forceStopApp(deviceSerial, SMOKE_APP_ID);
+  preparePhone(deviceSerial, appId);
+  if (holderSerial) {
+    preparePhone(holderSerial, appId);
+  }
   await sleep(1500);
   success('Phone ready');
 
@@ -575,9 +668,30 @@ async function main() {
   success('Pi BLE is advertising and idle');
 
   info('Reading Pi playback status');
-  const expected = await expectedFromPi(baseUrl);
+  let expected = await expectedFromPi(baseUrl);
   log(`Expecting: ${expected.join(' | ')}`);
   success('Pi status ready');
+
+  if (holderSerial) {
+    info('Connecting holder phone for busy-device check');
+    await launchConnectAndVerify(holderSerial, activity, expected, timeoutMs);
+    success('Holder phone owns the BLE session');
+    await waitForBtBusy(remoteTarget, timeoutMs);
+    success('Pi BLE reports the holder phone as the active session');
+
+    info('Connecting test phone and expecting Device busy');
+    await launchConnectExpectBusy(deviceSerial, activity, timeoutMs);
+    success('Test phone shows Device busy while holder is connected');
+
+    info('Clearing two-phone busy-device check');
+    forceStopApp(deviceSerial, appId);
+    forceStopApp(holderSerial, appId);
+    await sleep(1500);
+    await waitForBtIdle(remoteTarget, timeoutMs);
+    success('Pi BLE returned to idle after busy-device check');
+    expected = await expectedFromPi(baseUrl);
+    log(`Expecting after busy-device check: ${expected.join(' | ')}`);
+  }
 
   info('Launching Android app and connecting BLE');
   await launchConnectAndVerify(deviceSerial, activity, expected, timeoutMs);

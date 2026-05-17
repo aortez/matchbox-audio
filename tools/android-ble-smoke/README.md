@@ -72,6 +72,12 @@ it tries Android Studio's bundled JBR at
 `/home/oldman/.progs/android-studio/jbr`. Use `--java-home <path>` to override
 that detection.
 
+Use `--holder-serial <serial>` with a second USB-debuggable phone to run the
+true busy-device check. The holder phone connects first and owns the BLE
+session; the main `--serial` phone then attempts to connect and must show
+**Device busy**. If exactly two phones are attached, `--serial` can be inferred
+from the non-holder device.
+
 Use `--no-restart-check` to skip the force-stop/relaunch reconnect pass.
 Use `--no-lock-check` to skip the screen lock/unlock pass.
 Use `--skip-install` when the current APK is already installed.

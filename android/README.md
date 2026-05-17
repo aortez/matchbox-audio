@@ -51,6 +51,10 @@ reconnect, locks and wakes the phone, and captures
 points at a JDK with `bin/javac`; otherwise it tries Android Studio's bundled
 JBR at `/home/oldman/.progs/android-studio/jbr`.
 
+With two USB-debuggable phones attached, pass `--holder-serial <serial>` to run
+the true busy-device check. The holder phone connects first; the main test
+phone then attempts to connect and must show `Device busy`.
+
 The checked-in Gradle project expects a local Android SDK. Keep
 `local.properties` out of git; Android Studio can generate it, or copy the SDK
 path used by another local Android project.
