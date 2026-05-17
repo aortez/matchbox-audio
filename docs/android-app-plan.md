@@ -329,25 +329,27 @@ Phase 4 persistent BT state status:
 
 ## Phase 5: Android Project Skeleton
 
-- [ ] Add Android Gradle project under `android/`.
-- [ ] Add Kotlin + Jetpack Compose baseline.
-- [ ] Add package/application ID.
+- [x] Add Android Gradle project under `android/`.
+- [x] Add Kotlin + Jetpack Compose baseline.
+- [x] Add package/application ID.
 - [ ] Add app signing placeholders for debug and local release builds.
+- [x] Document local debug APK build/install commands.
 - [ ] Document local release APK build/install commands.
-- [ ] Add Android Bluetooth permissions.
-- [ ] Add `MatchboxTransport` interface.
-- [ ] Add fake scripted transport.
+- [x] Add Android Bluetooth permissions.
+- [x] Add `MatchboxTransport` interface.
+- [x] Add fake scripted transport.
 - [ ] Add BLE transport implementation shell behind the interface.
-- [ ] Add protocol fixture tests on the JVM.
+- [x] Add protocol fixture tests on the JVM.
 - [ ] Add Compose navigation:
   - [ ] setup
-  - [ ] now playing
+  - [x] now playing
   - [ ] library
   - [ ] queue
   - [ ] settings
-- [ ] Add fake-device mode for UI development.
-- [ ] Add view-model tests for initial screens.
-- [ ] Add instrumented Compose tests using fake transport.
+- [x] Add fake-device mode for UI development.
+- [x] Add view-model tests for initial screens.
+- [x] Add instrumented Compose tests using fake transport.
+- [x] Add attached-device screenshot capture helper.
 
 Exit criteria:
 
@@ -355,6 +357,25 @@ Exit criteria:
 - `./gradlew connectedDebugAndroidTest` passes on an emulator or attached
   device for fake-transport UI tests.
 - A debug APK installs and runs without needing Bluetooth.
+
+Phase 5 first-slice status:
+
+- Added `android/` as a standalone Gradle project using Kotlin, Compose, and
+  package ID `dev.matchbox.audio`.
+- The app launches directly into a now-playing view backed by
+  `FakeMatchboxTransport`; it does not require Bluetooth yet.
+- JVM tests parse the shared `protocol/fixtures/v1/system_snapshot_response.json`
+  fixture and verify fake-transport view-model state.
+- Compose instrumented tests render the now-playing screen with fake data.
+- Validated on May 16, 2026 PDT:
+  - `./gradlew test` passed.
+  - `./gradlew connectedDebugAndroidTest` passed on the Pixel 7 Pro.
+  - `./gradlew installDebug` installed the APK and the fake now-playing screen
+    rendered on the phone.
+  - `tools/android-capture.sh` captured the app from the attached phone.
+- AndroidX Test was bumped to `runner:1.7.0`, `junit:1.3.0`, and
+  `espresso-core:3.7.0` after `espresso-core:3.6.1` failed on Android 16 due
+  to a removed platform `InputManager.getInstance` method.
 
 ## Phase 6: Android BLE Connection
 
@@ -376,6 +397,8 @@ Exit criteria:
 - [ ] Verify app reconnects after phone lock/unlock.
 - [ ] Verify app behavior while phone is connected to car Bluetooth audio.
 - [ ] Decide whether RFCOMM fallback still needs a spike.
+- [ ] Add host-to-phone BLE instrumented smoke test against
+  `mba-bt --ble-local`.
 
 Exit criteria:
 
