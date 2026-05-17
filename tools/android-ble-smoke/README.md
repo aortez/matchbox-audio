@@ -84,6 +84,12 @@ Pi reports `playback_state: pause`, taps **Play**, verifies
 `playback_state: play`, and restores playback with `mba-cli play` if the check
 fails while audio is paused.
 
+Use `--volume-control-check` to opt into the real volume-control path. The
+helper saves the current Pi volume, taps the Android **+** or **-** control by
+one step, verifies the Pi volume changed, taps the opposite control, verifies
+the original volume was restored, and falls back to `mba-cli volume <level>` if
+cleanup is needed.
+
 Use `--no-restart-check` to skip the force-stop/relaunch reconnect pass.
 Use `--no-lock-check` to skip the screen lock/unlock pass.
 Use `--skip-install` when the current APK is already installed.

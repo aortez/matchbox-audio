@@ -3,8 +3,9 @@ use mba_protocol::{
     ProtocolError, ProtocolMessage, RequestId, SnapshotResult, TransportInfo,
     CAPABILITY_BLE_CHUNK_V1, EVENT_PLAYBACK_CHANGED, METHOD_EVENTS_SUBSCRIBE, METHOD_PLAYBACK_NEXT,
     METHOD_PLAYBACK_PAUSE, METHOD_PLAYBACK_PLAY, METHOD_PLAYBACK_PREVIOUS, METHOD_PLAYBACK_STOP,
-    METHOD_PLAYBACK_TOGGLE, METHOD_SYSTEM_HELLO, METHOD_SYSTEM_SNAPSHOT,
+    METHOD_PLAYBACK_TOGGLE, METHOD_PLAYBACK_VOLUME, METHOD_SYSTEM_HELLO, METHOD_SYSTEM_SNAPSHOT,
 };
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tracing::info;
 
@@ -87,6 +88,7 @@ where
             METHOD_PLAYBACK_STOP => self.playback_command(id, PlaybackCommand::Stop).await,
             METHOD_PLAYBACK_NEXT => self.playback_command(id, PlaybackCommand::Next).await,
             METHOD_PLAYBACK_PREVIOUS => self.playback_command(id, PlaybackCommand::Previous).await,
+            METHOD_PLAYBACK_VOLUME => self.playback_volume(id, params).await,
             _ => RouteOutput::single(ProtocolMessage::error_response(
                 id,
                 ProtocolError::new(
@@ -141,6 +143,7 @@ where
                 METHOD_PLAYBACK_STOP.to_string(),
                 METHOD_PLAYBACK_NEXT.to_string(),
                 METHOD_PLAYBACK_PREVIOUS.to_string(),
+                METHOD_PLAYBACK_VOLUME.to_string(),
                 CAPABILITY_BLE_CHUNK_V1.to_string(),
             ],
             transport: TransportInfo::ble_gatt_default(),
@@ -180,6 +183,42 @@ where
         }
     }
 
+    async fn playback_volume(&self, id: RequestId, params: Option<Value>) -> RouteOutput {
+        let params: VolumeParams = match params {
+            Some(params) => match serde_json::from_value(params) {
+                Ok(params) => params,
+                Err(error) => {
+                    return RouteOutput::single(ProtocolMessage::error_response(
+                        id,
+                        ProtocolError::new(
+                            ErrorCode::BadRequest,
+                            format!("invalid playback.volume params: {error}"),
+                        ),
+                    ));
+                }
+            },
+            None => {
+                return RouteOutput::single(ProtocolMessage::error_response(
+                    id,
+                    ProtocolError::new(
+                        ErrorCode::BadRequest,
+                        "playback.volume params are required",
+                    ),
+                ));
+            }
+        };
+
+        if !(0..=100).contains(&params.level) {
+            return RouteOutput::single(ProtocolMessage::error_response(
+                id,
+                ProtocolError::new(ErrorCode::BadRequest, "level must be between 0 and 100"),
+            ));
+        }
+
+        self.playback_command(id, PlaybackCommand::Volume(params.level as u8))
+            .await
+    }
+
     async fn events_subscribe(&self, id: RequestId) -> RouteOutput {
         let response = ProtocolMessage::ok_response(id, Some(json!({ "subscribed": true })));
         let mut output = RouteOutput::single(response);
@@ -195,6 +234,11 @@ where
 
         output
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct VolumeParams {
+    level: i32,
 }
 
 #[derive(Debug, Clone, PartialEq)]

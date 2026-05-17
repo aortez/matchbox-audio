@@ -43,6 +43,12 @@ class NowPlayingViewModel(
         runPlaybackCommand(PlaybackCommand.Previous)
     }
 
+    fun setVolume(level: Int) {
+        viewModelScope.launch {
+            sendVolume(level)
+        }
+    }
+
     suspend fun loadSnapshot() {
         uiState = NowPlayingUiState(loading = true)
         uiState = try {
@@ -59,6 +65,17 @@ class NowPlayingViewModel(
             NowPlayingUiState.ready(transport.requestSnapshot())
         } catch (error: Exception) {
             NowPlayingUiState.failed(error.message ?: "Playback command failed")
+        }
+    }
+
+    suspend fun sendVolume(level: Int) {
+        val clampedLevel = level.coerceIn(0, 100)
+        uiState = uiState.copy(error = null)
+        uiState = try {
+            transport.setVolume(clampedLevel)
+            NowPlayingUiState.ready(transport.requestSnapshot())
+        } catch (error: Exception) {
+            NowPlayingUiState.failed(error.message ?: "Volume command failed")
         }
     }
 

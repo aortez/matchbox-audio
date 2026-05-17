@@ -60,6 +60,26 @@ class NowPlayingScreenTest {
     }
 
     @Test
+    fun readyStateShowsVolumeControl() {
+        var selectedVolume: Int? = null
+
+        compose.setContent {
+            NowPlayingScreen(
+                state = NowPlayingUiState.ready(FakeSnapshots.nowPlaying),
+                onRefresh = {},
+                onVolumeChange = { selectedVolume = it },
+            )
+        }
+
+        compose.onNodeWithTag("volume-control").assertIsDisplayed()
+        compose.onNodeWithTag("volume-slider").assertIsDisplayed()
+        compose.onNodeWithText("65").assertIsDisplayed()
+        compose.onNodeWithTag("volume-up").performClick()
+
+        assertEquals(70, selectedVolume)
+    }
+
+    @Test
     fun pausedStateShowsPlayControl() {
         var playClicks = 0
         val pausedSnapshot = FakeSnapshots.nowPlaying.copy(

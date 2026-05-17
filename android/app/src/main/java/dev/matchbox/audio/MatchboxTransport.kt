@@ -3,6 +3,7 @@ package dev.matchbox.audio
 interface MatchboxTransport {
     suspend fun requestSnapshot(): DeviceSnapshot
     suspend fun sendPlaybackCommand(command: PlaybackCommand)
+    suspend fun setVolume(level: Int)
 }
 
 class FakeMatchboxTransport(
@@ -11,6 +12,7 @@ class FakeMatchboxTransport(
     private var snapshot: DeviceSnapshot = snapshot
 
     val playbackCommands = mutableListOf<PlaybackCommand>()
+    val volumeLevels = mutableListOf<Int>()
 
     override suspend fun requestSnapshot(): DeviceSnapshot = snapshot
 
@@ -29,6 +31,14 @@ class FakeMatchboxTransport(
                     -> snapshot.playback.state
                 },
             ),
+        )
+    }
+
+    override suspend fun setVolume(level: Int) {
+        require(level in 0..100) { "level must be between 0 and 100" }
+        volumeLevels.add(level)
+        snapshot = snapshot.copy(
+            playback = snapshot.playback.copy(volume = level),
         )
     }
 }

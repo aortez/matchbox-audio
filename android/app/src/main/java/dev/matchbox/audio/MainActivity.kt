@@ -10,6 +10,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -19,9 +20,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -39,6 +42,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     private lateinit var bleTransport: BleMatchboxTransport
@@ -102,6 +106,7 @@ fun MatchboxApp(
                 onStop = viewModel::stop,
                 onNext = viewModel::next,
                 onPrevious = viewModel::previous,
+                onVolumeChange = viewModel::setVolume,
                 onConnectBle = {
                     val missingPermissions = missingBlePermissions(context)
                     if (missingPermissions.isEmpty()) {
@@ -141,10 +146,12 @@ fun NowPlayingScreen(
     onStop: () -> Unit = {},
     onNext: () -> Unit = {},
     onPrevious: () -> Unit = {},
+    onVolumeChange: (Int) -> Unit = {},
 ) {
     Column(
         modifier = modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
@@ -221,6 +228,7 @@ fun NowPlayingScreen(
                 onStop = onStop,
                 onNext = onNext,
                 onPrevious = onPrevious,
+                onVolumeChange = onVolumeChange,
             )
         }
     }
@@ -290,6 +298,7 @@ private fun NowPlayingContent(
     onStop: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
+    onVolumeChange: (Int) -> Unit,
 ) {
     val playback = device.playback
     val track = playback.track
@@ -367,13 +376,90 @@ private fun NowPlayingContent(
 
         Spacer(modifier = Modifier.height(6.dp))
 
-        DetailRow(label = "Volume", value = playback.volume.toString())
+        VolumeControl(
+            volume = playback.volume,
+            onVolumeChange = onVolumeChange,
+        )
         DetailRow(
             label = "Queue",
             value = queueLabel(playback.queuePosition, playback.queueLength),
         )
         DetailRow(label = "Network", value = device.networkMode ?: "unknown")
         DetailRow(label = "Connection", value = device.activeConnection ?: "none")
+    }
+}
+
+@Composable
+private fun VolumeControl(
+    volume: Int,
+    onVolumeChange: (Int) -> Unit,
+) {
+    var draftVolume by remember(volume) { mutableStateOf(volume.coerceIn(0, 100).toFloat()) }
+    val draftLevel = draftVolume.roundToInt().coerceIn(0, 100)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("volume-control"),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Volume",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = draftLevel.toString(),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+        Slider(
+            value = draftVolume,
+            onValueChange = { value ->
+                draftVolume = value.roundToInt().coerceIn(0, 100).toFloat()
+            },
+            onValueChangeFinished = {
+                onVolumeChange(draftVolume.roundToInt().coerceIn(0, 100))
+            },
+            valueRange = 0f..100f,
+            steps = 99,
+            modifier = Modifier.testTag("volume-slider"),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedButton(
+                onClick = {
+                    val nextLevel = (draftLevel - 5).coerceIn(0, 100)
+                    draftVolume = nextLevel.toFloat()
+                    onVolumeChange(nextLevel)
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("volume-down"),
+            ) {
+                Text("-")
+            }
+            OutlinedButton(
+                onClick = {
+                    val nextLevel = (draftLevel + 5).coerceIn(0, 100)
+                    draftVolume = nextLevel.toFloat()
+                    onVolumeChange(nextLevel)
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("volume-up"),
+            ) {
+                Text("+")
+            }
+        }
     }
 }
 

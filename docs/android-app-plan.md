@@ -558,17 +558,27 @@ Phase 7 playback-control first-slice status:
 - Android now exposes Previous, Play/Pause, Next, and Stop controls on the
   now-playing screen. Each command sends a BLE protocol request and refreshes
   `system.snapshot` afterward.
+- Android now exposes volume step buttons and a volume slider. The slider sends
+  one BLE command when released, while the step buttons send one command per
+  tap.
 - Fake transports on both Rust and Android update playback state for tests and
-  local UI development.
+  local UI development, including volume changes.
 - `tools/android-real-ble-smoke.mjs --playback-control-check` now exercises the
   least-disruptive real control path by tapping Android Pause, verifying Pi
   `playback_state: pause`, tapping Android Play, and verifying
   `playback_state: play`.
+- `tools/android-real-ble-smoke.mjs --volume-control-check` exercises the real
+  volume path by tapping Android **+** or **-**, verifying Pi
+  `playback_volume`, then restoring the original volume.
+- The volume slice is covered by Rust router/backend tests, Android unit tests,
+  connected Compose tests, and a non-disruptive real BLE snapshot smoke.
 - Validated on May 17, 2026 PDT with the Pixel 7 Pro and
   `matchbox-audio.local`: the control-enabled real BLE smoke passed Pause/Play,
   app restart reconnect, and lock/unlock reconnect.
 - Manual bench validation on the same setup also covered Play, Pause, Previous,
   and Next from the Android app against the real Pi/player path.
+- After updating the Pi image, manual bench validation also covered the Android
+  volume step buttons and slider against the real Pi/player path.
 
 - [ ] Now-playing screen:
   - [x] playback state
@@ -584,7 +594,7 @@ Phase 7 playback-control first-slice status:
   - [x] next
   - [x] previous
   - [ ] seek
-  - [ ] volume set
+  - [x] volume set
 - [ ] Library screen:
   - [ ] root listing
   - [ ] nested directory navigation

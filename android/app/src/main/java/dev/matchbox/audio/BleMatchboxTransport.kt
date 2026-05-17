@@ -138,6 +138,14 @@ class BleMatchboxTransport(
         sendRequest(command.method)
     }
 
+    override suspend fun setVolume(level: Int) {
+        require(level in 0..100) { "level must be between 0 and 100" }
+        ensureConnected()
+        ensureHello()
+        val params = JSONObject().put("level", level)
+        sendRequest("playback.volume", params)
+    }
+
     private suspend fun ensureConnected() {
         withContext(mainDispatcher) {
             when (_connectionState.value.phase) {

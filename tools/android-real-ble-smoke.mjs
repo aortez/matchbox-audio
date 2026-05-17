@@ -92,6 +92,8 @@ Options:
   --no-lock-check      Skip screen lock/unlock verification
   --playback-control-check
                       Tap Pause/Play in the Android app and verify Pi playback state.
+  --volume-control-check
+                      Tap Android +/- volume controls and verify Pi playback volume.
   --lock-duration <ms> How long to leave the phone asleep (default: ${DEFAULT_LOCK_DURATION_MS})
   --output <path>      Screenshot output path (default: ${DEFAULT_OUTPUT})
   --timeout <ms>       BLE/UI wait timeout (default: ${DEFAULT_TIMEOUT_MS})
@@ -632,6 +634,11 @@ function playbackState(status) {
   return status.playback?.state ? String(status.playback.state).toLowerCase() : '';
 }
 
+function playbackVolume(status) {
+  const volume = status.playback?.volume;
+  return Number.isInteger(volume) ? volume : null;
+}
+
 async function waitForPiPlaybackState(baseUrl, expectedState, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let lastState = '';
@@ -647,6 +654,24 @@ async function waitForPiPlaybackState(baseUrl, expectedState, timeoutMs) {
 
   throw new Error(
     `Timed out waiting for Pi playback_state: ${expectedState}; last state: ${lastState || 'unknown'}`,
+  );
+}
+
+async function waitForPiPlaybackVolume(baseUrl, expectedVolume, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let lastVolume = null;
+
+  while (Date.now() < deadline) {
+    const status = await piStatus(baseUrl);
+    lastVolume = playbackVolume(status);
+    if (lastVolume === expectedVolume) {
+      return status;
+    }
+    await sleep(500);
+  }
+
+  throw new Error(
+    `Timed out waiting for Pi playback_volume: ${expectedVolume}; last volume: ${lastVolume ?? 'unknown'}`,
   );
 }
 
@@ -667,6 +692,26 @@ async function restorePlaybackIfNeeded(baseUrl, remoteTarget, originalState, tim
     success(`Pi playback_state restored to ${originalState}`);
   } catch (error) {
     fail(`Playback restore failed: ${error.message}`);
+  }
+}
+
+async function restoreVolumeIfNeeded(baseUrl, remoteTarget, originalVolume, timeoutMs) {
+  if (!Number.isInteger(originalVolume)) {
+    return;
+  }
+
+  try {
+    const current = await piStatus(baseUrl);
+    if (playbackVolume(current) === originalVolume) {
+      return;
+    }
+
+    info(`Restoring Pi playback_volume to ${originalVolume}`);
+    ssh(remoteTarget, `mba-cli volume ${originalVolume}`);
+    await waitForPiPlaybackVolume(baseUrl, originalVolume, timeoutMs);
+    success(`Pi playback_volume restored to ${originalVolume}`);
+  } catch (error) {
+    fail(`Volume restore failed: ${error.message}`);
   }
 }
 
@@ -698,6 +743,35 @@ async function runPlaybackControlCheck(serial, baseUrl, remoteTarget, timeoutMs)
   }
 }
 
+async function runVolumeControlCheck(serial, baseUrl, remoteTarget, timeoutMs) {
+  const initialStatus = await piStatus(baseUrl);
+  const initialVolume = playbackVolume(initialStatus);
+  if (!Number.isInteger(initialVolume)) {
+    throw new Error('Volume control check requires Pi playback volume');
+  }
+
+  const targetVolume = initialVolume <= 95 ? initialVolume + 5 : initialVolume - 5;
+  const adjustText = targetVolume > initialVolume ? '+' : '-';
+  const restoreText = targetVolume > initialVolume ? '-' : '+';
+
+  try {
+    info(`Tapping Android ${adjustText} and waiting for Pi playback_volume: ${targetVolume}`);
+    await tapTextWhenVisible(serial, adjustText, timeoutMs);
+    const adjustedStatus = await waitForPiPlaybackVolume(baseUrl, targetVolume, timeoutMs);
+    await waitForAndroidValues(serial, expectedUiValues(adjustedStatus), timeoutMs);
+    success(`Android volume control changed Pi playback_volume to ${targetVolume}`);
+
+    info(`Tapping Android ${restoreText} and waiting for Pi playback_volume: ${initialVolume}`);
+    await tapTextWhenVisible(serial, restoreText, timeoutMs);
+    const restoredStatus = await waitForPiPlaybackVolume(baseUrl, initialVolume, timeoutMs);
+    await waitForAndroidValues(serial, expectedUiValues(restoredStatus), timeoutMs);
+    success(`Android volume control restored Pi playback_volume to ${initialVolume}`);
+    return restoredStatus;
+  } finally {
+    await restoreVolumeIfNeeded(baseUrl, remoteTarget, initialVolume, timeoutMs);
+  }
+}
+
 function preparePhone(serial, appId) {
   wakePhone(serial);
   adbAllowFailure(serial, 'shell', 'pm', 'grant', appId, 'android.permission.BLUETOOTH_SCAN');
@@ -726,6 +800,7 @@ async function main() {
   const restartCheck = !flag(args, '--no-restart-check');
   const lockCheck = !flag(args, '--no-lock-check');
   const playbackControlCheck = flag(args, '--playback-control-check');
+  const volumeControlCheck = flag(args, '--volume-control-check');
   const lockDurationMs = Number(argValue(args, '--lock-duration', String(DEFAULT_LOCK_DURATION_MS)));
   const output = argValue(args, '--output', DEFAULT_OUTPUT);
   const timeoutMs = Number(argValue(args, '--timeout', String(DEFAULT_TIMEOUT_MS)));
@@ -811,6 +886,13 @@ async function main() {
     const status = await runPlaybackControlCheck(deviceSerial, baseUrl, remoteTarget, timeoutMs);
     expected = expectedUiValues(status);
     success('Android BLE playback-control check passed');
+  }
+
+  if (volumeControlCheck) {
+    info('Running Android BLE volume-control check');
+    const status = await runVolumeControlCheck(deviceSerial, baseUrl, remoteTarget, timeoutMs);
+    expected = expectedUiValues(status);
+    success('Android BLE volume-control check passed');
   }
 
   if (restartCheck) {

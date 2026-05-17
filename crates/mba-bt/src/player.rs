@@ -12,6 +12,7 @@ use mba_protocol::{
     StatusResponse, TrackInfo, API_VERSION, SERVICE_NAME,
 };
 use reqwest::{Client, StatusCode, Url};
+use serde_json::{json, Value};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub type PlayerResult<T> = Result<T, PlayerError>;
@@ -31,6 +32,7 @@ pub enum PlaybackCommand {
     Stop,
     Next,
     Previous,
+    Volume(u8),
 }
 
 impl PlaybackCommand {
@@ -42,6 +44,14 @@ impl PlaybackCommand {
             Self::Stop => "stop",
             Self::Next => "next",
             Self::Previous => "previous",
+            Self::Volume(_) => "volume",
+        }
+    }
+
+    fn body(self) -> Option<Value> {
+        match self {
+            Self::Volume(level) => Some(json!({ "level": level })),
+            _ => None,
         }
     }
 }
@@ -150,16 +160,13 @@ impl PlayerBackend for HttpPlayerBackend {
     fn playback_command(&self, command: PlaybackCommand) -> BoxFuture<'_, PlayerResult<()>> {
         Box::pin(async move {
             let url = self.playback_url(command)?;
-            let response = self
-                .client
-                .post(url.clone())
-                .send()
-                .await
-                .map_err(|error| {
-                    PlayerError::Unavailable(format!(
-                        "failed to query mba-player at {url}: {error}"
-                    ))
-                })?;
+            let mut request = self.client.post(url.clone());
+            if let Some(body) = command.body() {
+                request = request.json(&body);
+            }
+            let response = request.send().await.map_err(|error| {
+                PlayerError::Unavailable(format!("failed to query mba-player at {url}: {error}"))
+            })?;
 
             let status = response.status();
             if !status.is_success() {
@@ -245,6 +252,7 @@ impl PlayerBackend for FakePlayerBackend {
                 }
                 PlaybackCommand::Stop => playback.state = PlaybackState::Stop,
                 PlaybackCommand::Next | PlaybackCommand::Previous => {}
+                PlaybackCommand::Volume(level) => playback.volume = level,
             }
             Ok(())
         })
@@ -330,6 +338,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn http_player_backend_posts_volume_command_body() {
+        let server = TestHttpServer::responding_with(StatusCode::ACCEPTED, b"{}".to_vec());
+        let backend = HttpPlayerBackend::new(server.base_url()).expect("backend builds");
+
+        backend
+            .playback_command(PlaybackCommand::Volume(42))
+            .await
+            .expect("command succeeds");
+
+        let request = server.request();
+        assert_eq!(request.path, "/api/v1/playback/volume");
+        assert_eq!(request.body, r#"{"level":42}"#);
+    }
+
+    #[tokio::test]
     async fn fake_player_backend_updates_playback_state() {
         let backend = FakePlayerBackend::ready();
 
@@ -343,6 +366,19 @@ mod tests {
             snapshot.playback.expect("playback").state,
             PlaybackState::Pause
         );
+    }
+
+    #[tokio::test]
+    async fn fake_player_backend_updates_volume() {
+        let backend = FakePlayerBackend::ready();
+
+        backend
+            .playback_command(PlaybackCommand::Volume(42))
+            .await
+            .expect("volume succeeds");
+
+        let snapshot = backend.snapshot().await.expect("snapshot succeeds");
+        assert_eq!(snapshot.playback.expect("playback").volume, 42);
     }
 
     #[tokio::test]
@@ -370,7 +406,13 @@ mod tests {
 
     struct TestHttpServer {
         base_url: Url,
-        join: thread::JoinHandle<String>,
+        join: thread::JoinHandle<TestHttpRequest>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct TestHttpRequest {
+        path: String,
+        body: String,
     }
 
     impl TestHttpServer {
@@ -387,7 +429,7 @@ mod tests {
                         break;
                     }
                     request.extend_from_slice(&buffer[..n]);
-                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    if request_complete(&request) {
                         break;
                     }
                 }
@@ -409,12 +451,17 @@ mod tests {
                 stream.write_all(&body).expect("body written");
 
                 let request = String::from_utf8_lossy(&request);
-                request
+                let path = request
                     .lines()
                     .next()
                     .and_then(|line| line.split_whitespace().nth(1))
                     .unwrap_or("")
-                    .to_string()
+                    .to_string();
+                let body = request
+                    .split_once("\r\n\r\n")
+                    .map(|(_, body)| body.to_string())
+                    .unwrap_or_default();
+                TestHttpRequest { path, body }
             });
 
             Self {
@@ -428,7 +475,34 @@ mod tests {
         }
 
         fn request_path(self) -> String {
+            self.request().path
+        }
+
+        fn request(self) -> TestHttpRequest {
             self.join.join().expect("test server joined")
         }
+    }
+
+    fn request_complete(request: &[u8]) -> bool {
+        let Some(header_end) = request
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .map(|index| index + 4)
+        else {
+            return false;
+        };
+        let headers = String::from_utf8_lossy(&request[..header_end]);
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                if name.eq_ignore_ascii_case("content-length") {
+                    value.trim().parse::<usize>().ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
+        request.len() >= header_end + content_length
     }
 }

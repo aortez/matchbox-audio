@@ -20,7 +20,8 @@ pub use state::*;
 mod tests {
     use mba_protocol::{
         ble, ChunkReassembler, ErrorCode, ProtocolMessage, METHOD_EVENTS_SUBSCRIBE,
-        METHOD_PLAYBACK_PAUSE, METHOD_PLAYBACK_PLAY, METHOD_SYSTEM_HELLO, METHOD_SYSTEM_SNAPSHOT,
+        METHOD_PLAYBACK_PAUSE, METHOD_PLAYBACK_PLAY, METHOD_PLAYBACK_VOLUME, METHOD_SYSTEM_HELLO,
+        METHOD_SYSTEM_SNAPSHOT,
     };
     use serde_json::{json, Value};
 
@@ -118,9 +119,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn request_router_handles_volume_command() {
+        let player = FakePlayerBackend::ready();
+        let router = RequestRouter::new(player.clone());
+        let request = ProtocolMessage::request(
+            4,
+            METHOD_PLAYBACK_VOLUME,
+            Some(json!({
+                "level": 42,
+            })),
+        );
+
+        let result = response_result(route_one(&router, request).await);
+
+        assert_eq!(result["accepted"], true);
+        let snapshot = player.snapshot().await.expect("snapshot succeeds");
+        assert_eq!(snapshot.playback.expect("playback").volume, 42);
+    }
+
+    #[tokio::test]
+    async fn request_router_rejects_invalid_volume_level() {
+        let router = RequestRouter::new(FakePlayerBackend::ready());
+        let request = ProtocolMessage::request(
+            5,
+            METHOD_PLAYBACK_VOLUME,
+            Some(json!({
+                "level": 101,
+            })),
+        );
+
+        let code = response_error_code(route_one(&router, request).await);
+
+        assert_eq!(code, ErrorCode::BadRequest);
+    }
+
+    #[tokio::test]
     async fn request_router_requires_trust_for_playback_commands() {
         let router = RequestRouter::new(FakePlayerBackend::ready()).with_trusted_client(false);
-        let request = ProtocolMessage::request(4, METHOD_PLAYBACK_PLAY, None);
+        let request = ProtocolMessage::request(6, METHOD_PLAYBACK_PLAY, None);
 
         let code = response_error_code(route_one(&router, request).await);
 
@@ -130,7 +166,7 @@ mod tests {
     #[tokio::test]
     async fn request_router_rejects_unsupported_method() {
         let router = RequestRouter::new(FakePlayerBackend::ready());
-        let request = ProtocolMessage::request(5, "debug.noop", None);
+        let request = ProtocolMessage::request(7, "debug.noop", None);
 
         let code = response_error_code(route_one(&router, request).await);
 
@@ -140,7 +176,7 @@ mod tests {
     #[tokio::test]
     async fn request_router_returns_auth_required_for_untrusted_control() {
         let router = RequestRouter::new(FakePlayerBackend::ready()).with_trusted_client(false);
-        let request = ProtocolMessage::request(6, METHOD_SYSTEM_SNAPSHOT, None);
+        let request = ProtocolMessage::request(8, METHOD_SYSTEM_SNAPSHOT, None);
 
         let code = response_error_code(route_one(&router, request).await);
 
@@ -150,7 +186,7 @@ mod tests {
     #[tokio::test]
     async fn request_router_reports_player_unavailable() {
         let router = RequestRouter::new(FakePlayerBackend::unavailable("mpd offline"));
-        let request = ProtocolMessage::request(7, METHOD_SYSTEM_SNAPSHOT, None);
+        let request = ProtocolMessage::request(9, METHOD_SYSTEM_SNAPSHOT, None);
 
         let code = response_error_code(route_one(&router, request).await);
 
@@ -160,7 +196,7 @@ mod tests {
     #[tokio::test]
     async fn request_router_delivers_fake_event_after_subscribe() {
         let router = RequestRouter::new(FakePlayerBackend::ready());
-        let request = ProtocolMessage::request(8, METHOD_EVENTS_SUBSCRIBE, None);
+        let request = ProtocolMessage::request(10, METHOD_EVENTS_SUBSCRIBE, None);
 
         let messages = router.route(request).await.messages();
 
