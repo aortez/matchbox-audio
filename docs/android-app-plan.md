@@ -456,6 +456,10 @@ Phase 6 reconnect-slice status:
   snapshot, confirmed the known-device preference, force-stopped the app, waited
   for `mba-bt` to return idle, relaunched, reconnected, and matched the same Pi
   snapshot again.
+- The same smoke helper now locks the phone with ADB, waits, wakes and
+  dismisses keyguard, returns the app to the foreground, rereads the current Pi
+  status, and verifies the Android UI still reaches `BLE ready` with matching
+  now-playing values.
 
 ## Phase 6: Android BLE Connection
 
@@ -475,7 +479,7 @@ Phase 6 reconnect-slice status:
 - [x] Verify app can display `system.snapshot` from the Pi.
 - [x] Add real Pi plus Android app BLE smoke helper.
 - [x] Verify app reconnects after app process restart.
-- [ ] Verify app reconnects after phone lock/unlock.
+- [x] Verify app reconnects after phone lock/unlock.
 - [ ] Verify app behavior while phone is connected to car Bluetooth audio.
 - [ ] Decide whether RFCOMM fallback still needs a spike.
 - [ ] Add host-to-phone BLE instrumented smoke test against

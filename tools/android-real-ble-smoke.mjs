@@ -15,6 +15,7 @@ const DEFAULT_APP_ID = 'dev.matchbox.audio';
 const DEFAULT_ACTIVITY = `${DEFAULT_APP_ID}/.MainActivity`;
 const DEFAULT_OUTPUT = '/tmp/matchbox-android-real-ble-smoke.png';
 const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_LOCK_DURATION_MS = 15_000;
 const DEFAULT_ANDROID_STUDIO_JBR = '/home/oldman/.progs/android-studio/jbr';
 const SMOKE_APP_ID = 'dev.matchbox.ble_smoke';
 
@@ -87,6 +88,8 @@ Options:
   --java-home <path>   JDK for Gradle installDebug
   --skip-install       Do not run ./gradlew installDebug first
   --no-restart-check   Skip force-stop/relaunch reconnect verification
+  --no-lock-check      Skip screen lock/unlock verification
+  --lock-duration <ms> How long to leave the phone asleep (default: ${DEFAULT_LOCK_DURATION_MS})
   --output <path>      Screenshot output path (default: ${DEFAULT_OUTPUT})
   --timeout <ms>       BLE/UI wait timeout (default: ${DEFAULT_TIMEOUT_MS})
   -h, --help           Show this help
@@ -176,6 +179,15 @@ function adbAllowFailure(serial, ...args) {
 
 function forceStopApp(serial, appId) {
   adbAllowFailure(serial, 'shell', 'am', 'force-stop', appId);
+}
+
+function wakePhone(serial) {
+  adb(serial, 'shell', 'input', 'keyevent', 'KEYCODE_WAKEUP');
+  adbAllowFailure(serial, 'shell', 'wm', 'dismiss-keyguard');
+}
+
+function sleepPhone(serial) {
+  adb(serial, 'shell', 'input', 'keyevent', 'KEYCODE_SLEEP');
 }
 
 function ssh(remoteTarget, command) {
@@ -477,6 +489,11 @@ async function launchConnectAndVerify(serial, activity, expected, timeoutMs) {
   await waitForAndroidValues(serial, expected, timeoutMs);
 }
 
+async function expectedFromPi(baseUrl) {
+  const status = await piStatus(baseUrl);
+  return expectedUiValues(status);
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (flag(args, '-h') || flag(args, '--help')) {
@@ -494,12 +511,17 @@ async function main() {
   const explicitJavaHome = argProvided(args, '--java-home') ? argValue(args, '--java-home', '') : '';
   const skipInstall = flag(args, '--skip-install');
   const restartCheck = !flag(args, '--no-restart-check');
+  const lockCheck = !flag(args, '--no-lock-check');
+  const lockDurationMs = Number(argValue(args, '--lock-duration', String(DEFAULT_LOCK_DURATION_MS)));
   const output = argValue(args, '--output', DEFAULT_OUTPUT);
   const timeoutMs = Number(argValue(args, '--timeout', String(DEFAULT_TIMEOUT_MS)));
   const baseUrl = `http://${host}:8090`;
 
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     throw new Error('--timeout must be a positive number of milliseconds');
+  }
+  if (!Number.isFinite(lockDurationMs) || lockDurationMs <= 0) {
+    throw new Error('--lock-duration must be a positive number of milliseconds');
   }
 
   log('');
@@ -521,8 +543,7 @@ async function main() {
   }
 
   info('Preparing phone and clearing previous BLE sessions');
-  adb(deviceSerial, 'shell', 'input', 'keyevent', 'KEYCODE_WAKEUP');
-  adbAllowFailure(deviceSerial, 'shell', 'wm', 'dismiss-keyguard');
+  wakePhone(deviceSerial);
   adbAllowFailure(deviceSerial, 'shell', 'pm', 'grant', appId, 'android.permission.BLUETOOTH_SCAN');
   adbAllowFailure(deviceSerial, 'shell', 'pm', 'grant', appId, 'android.permission.BLUETOOTH_CONNECT');
   forceStopApp(deviceSerial, appId);
@@ -536,8 +557,7 @@ async function main() {
   success('Pi BLE is advertising and idle');
 
   info('Reading Pi playback status');
-  const status = await piStatus(baseUrl);
-  const expected = expectedUiValues(status);
+  const expected = await expectedFromPi(baseUrl);
   log(`Expecting: ${expected.join(' | ')}`);
   success('Pi status ready');
 
@@ -557,6 +577,20 @@ async function main() {
     info('Relaunching Android app for known-device reconnect check');
     await launchConnectAndVerify(deviceSerial, activity, expected, timeoutMs);
     success('Android BLE reconnect after app restart matches Pi status');
+  }
+
+  if (lockCheck) {
+    info(`Sleeping phone for lock/unlock check (${lockDurationMs} ms)`);
+    sleepPhone(deviceSerial);
+    await sleep(lockDurationMs);
+
+    info('Waking phone and returning app to foreground');
+    wakePhone(deviceSerial);
+    await sleep(1000);
+    const lockExpected = await expectedFromPi(baseUrl);
+    log(`Expecting after unlock: ${lockExpected.join(' | ')}`);
+    await launchConnectAndVerify(deviceSerial, activity, lockExpected, timeoutMs);
+    success('Android BLE snapshot matches Pi status after lock/unlock');
   }
 
   captureScreenshot(deviceSerial, output);
