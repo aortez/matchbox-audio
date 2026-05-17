@@ -29,7 +29,13 @@ cargo run --manifest-path tools/ble-gatt-spike/Cargo.toml
 or the Phase 3 `mba-bt` BLE-local mode:
 
 ```sh
-cargo run -p mba-bt -- --ble-local
+cargo run -p mba-bt -- --ble-local --control-socket /tmp/mba-bt/control.sock
+```
+
+While `mba-bt --ble-local` is running, local daemon state can be inspected with:
+
+```sh
+cargo run -p mba-cli -- bt --socket /tmp/mba-bt/control.sock status
 ```
 
 For the Matchbox target image, use the cross-build and SSH commands documented

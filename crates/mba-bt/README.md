@@ -53,3 +53,15 @@ The active app session starts when a phone subscribes to the TX notification
 characteristic. That gives `mba-bt` a response path. A second subscriber gets a
 structured `busy` response when possible, and RX writes from inactive Bluetooth
 addresses are rejected.
+
+BLE-local also serves a local admin socket for CLI inspection:
+
+```sh
+cargo run -p mba-cli -- bt status
+```
+
+The packaged service uses `/run/mba-bt/control.sock`. For a local developer run,
+use `--control-socket /tmp/mba-bt/control.sock` on `mba-bt` and
+`--socket /tmp/mba-bt/control.sock` on `mba-cli`. Use `--no-control-socket` to
+disable the socket. It reports adapter, advertising, pairing, busy,
+active-client, and RX/TX counter state without going through BLE.

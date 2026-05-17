@@ -2,9 +2,15 @@ use std::{io::Write as _, path::PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
-use mba_protocol::{LibraryListing, QueueListing, RescanResponse, StatusResponse};
+use mba_protocol::{
+    BtControlRequest, BtControlResponse, BtStatus, LibraryListing, QueueListing, RescanResponse,
+    StatusResponse, DEFAULT_BT_CONTROL_SOCKET,
+};
 use reqwest::{Client, Method, Url};
-use tokio::{io::AsyncReadExt, net::UnixStream};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::UnixStream,
+};
 
 const DEFAULT_SNAPSHOT_SOCKET: &str = "/run/mba-device/snapshot.sock";
 
@@ -107,6 +113,20 @@ enum Command {
         #[arg(long, default_value = DEFAULT_SNAPSHOT_SOCKET)]
         socket: PathBuf,
     },
+    /// Inspect or control the local Bluetooth daemon.
+    Bt {
+        /// Path to the mba-bt local control socket.
+        #[arg(long, default_value = DEFAULT_BT_CONTROL_SOCKET)]
+        socket: PathBuf,
+        #[command(subcommand)]
+        command: BtCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum BtCommand {
+    /// Show local Bluetooth daemon status.
+    Status,
 }
 
 #[tokio::main]
@@ -167,7 +187,91 @@ async fn main() -> Result<()> {
         }
         Command::Clear => clear_queue(&client, cli.server).await,
         Command::Screenshot { output, socket } => capture_screenshot(socket, output).await,
+        Command::Bt { socket, command } => match command {
+            BtCommand::Status => show_bt_status(socket).await,
+        },
     }
+}
+
+async fn show_bt_status(socket: PathBuf) -> Result<()> {
+    let response = send_bt_control_request(&socket, &BtControlRequest::status()).await?;
+    let status = bt_response_status(response)?;
+
+    print!("{}", format_bt_status(&status));
+    Ok(())
+}
+
+async fn send_bt_control_request(
+    socket: &PathBuf,
+    request: &BtControlRequest,
+) -> Result<BtControlResponse> {
+    let mut stream = UnixStream::connect(socket).await.with_context(|| {
+        format!(
+            "failed to connect to bt control socket {}",
+            socket.display()
+        )
+    })?;
+    let request_bytes = serde_json::to_vec(request).context("failed to encode bt request")?;
+    stream
+        .write_all(&request_bytes)
+        .await
+        .with_context(|| format!("failed to write bt request to {}", socket.display()))?;
+    stream
+        .shutdown()
+        .await
+        .with_context(|| format!("failed to finish bt request to {}", socket.display()))?;
+
+    let mut response_bytes = Vec::new();
+    stream
+        .read_to_end(&mut response_bytes)
+        .await
+        .with_context(|| format!("failed to read bt response from {}", socket.display()))?;
+    serde_json::from_slice(&response_bytes)
+        .with_context(|| format!("failed to decode bt response from {}", socket.display()))
+}
+
+fn bt_response_status(response: BtControlResponse) -> Result<BtStatus> {
+    if response.ok {
+        return response
+            .status
+            .ok_or_else(|| anyhow!("bt status response was missing status payload"));
+    }
+
+    let error = response
+        .error
+        .ok_or_else(|| anyhow!("bt status failed without an error payload"))?;
+    Err(anyhow!(
+        "bt status failed: {}: {}",
+        error.code,
+        error.message
+    ))
+}
+
+fn format_bt_status(status: &BtStatus) -> String {
+    let mut output = String::new();
+    output.push_str(&format!("service: {}\n", status.service));
+    output.push_str(&format!("transport: {}\n", status.transport));
+    output.push_str(&format!("device_name: {}\n", status.device_name));
+    if let Some(adapter) = &status.adapter {
+        output.push_str(&format!("adapter: {}\n", adapter.name));
+        output.push_str(&format!("adapter_address: {}\n", adapter.address));
+    }
+    output.push_str(&format!("advertising: {}\n", status.advertising));
+    output.push_str(&format!("service_uuid: {}\n", status.service_uuid));
+    output.push_str(&format!("pairing_state: {}\n", status.pairing_state));
+    output.push_str(&format!("busy: {}\n", status.busy));
+    if let Some(client) = &status.active_client {
+        output.push_str(&format!("active_client_address: {}\n", client.address));
+        output.push_str(&format!("active_client_adapter: {}\n", client.adapter));
+        output.push_str(&format!("active_client_mtu: {}\n", client.mtu));
+        output.push_str(&format!(
+            "active_client_session_token: {}\n",
+            client.session_token
+        ));
+    }
+    output.push_str(&format!("rx_chunk_writes: {}\n", status.rx_chunk_writes));
+    output.push_str(&format!("tx_chunks_sent: {}\n", status.tx_chunks_sent));
+    output
 }
 
 async fn capture_screenshot(socket: PathBuf, output: String) -> Result<()> {
@@ -544,5 +648,46 @@ mod tests {
         assert_eq!(body["id"], 99);
         assert_eq!(body["to_position"], 1);
         assert!(body.get("position").is_none());
+    }
+
+    #[test]
+    fn format_bt_status_includes_session_details() {
+        let status = BtStatus {
+            service: "matchbox-audio".to_string(),
+            transport: "mba-bt-ble-local".to_string(),
+            device_name: "Matchbox Audio".to_string(),
+            adapter: Some(mba_protocol::BtAdapterStatus {
+                name: "hci0".to_string(),
+                address: "88:A2:9E:B1:87:91".to_string(),
+            }),
+            advertising: true,
+            service_uuid: "1cef04f1-966e-43ad-860f-086db4f277d6".to_string(),
+            pairing_state: "local".to_string(),
+            busy: true,
+            active_client: Some(mba_protocol::BtActiveClientStatus {
+                address: "6A:2E:A9:9C:0A:81".to_string(),
+                adapter: "hci0".to_string(),
+                mtu: 512,
+                session_token: 3,
+            }),
+            rx_chunk_writes: 2,
+            tx_chunks_sent: 6,
+        };
+
+        let output = format_bt_status(&status);
+
+        assert!(output.contains("service: matchbox-audio\n"));
+        assert!(output.contains("adapter_address: 88:A2:9E:B1:87:91\n"));
+        assert!(output.contains("busy: true\n"));
+        assert!(output.contains("active_client_mtu: 512\n"));
+        assert!(output.contains("tx_chunks_sent: 6\n"));
+    }
+
+    #[test]
+    fn bt_response_status_surfaces_error_payload() {
+        let error = bt_response_status(BtControlResponse::error("bad_request", "nope"))
+            .expect_err("error response fails");
+
+        assert!(error.to_string().contains("bad_request: nope"));
     }
 }

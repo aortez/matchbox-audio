@@ -1,4 +1,7 @@
-use std::io::{Read, Write};
+use std::{
+    io::{Read, Write},
+    path::PathBuf,
+};
 
 use anyhow::Context;
 use clap::Parser;
@@ -6,7 +9,7 @@ use mba_bt::{
     encode_frame, run_ble_gatt, BleGattOptions, FakePlayerBackend, FrameDecoder, RequestRouter,
     RouteOutput,
 };
-use mba_protocol::{ErrorCode, ProtocolError, ProtocolMessage};
+use mba_protocol::{ErrorCode, ProtocolError, ProtocolMessage, DEFAULT_BT_CONTROL_SOCKET};
 
 #[derive(Debug, Parser)]
 #[command(about = "Local Matchbox Bluetooth protocol exerciser")]
@@ -18,6 +21,14 @@ struct Args {
         help = "Advertise the local BLE GATT server with a fake player backend"
     )]
     ble_local: bool,
+    #[arg(
+        long,
+        default_value = DEFAULT_BT_CONTROL_SOCKET,
+        help = "Path for the local mba-bt control socket in BLE-local mode"
+    )]
+    control_socket: PathBuf,
+    #[arg(long, help = "Disable the local mba-bt control socket")]
+    no_control_socket: bool,
 }
 
 #[tokio::main]
@@ -37,7 +48,13 @@ async fn main() -> anyhow::Result<()> {
     if args.ble_local {
         let router =
             RequestRouter::new(FakePlayerBackend::ready()).with_build_version("mba-bt-ble-local");
-        return run_ble_gatt(router, BleGattOptions::default()).await;
+        let mut options = BleGattOptions::default();
+        options.control_socket = if args.no_control_socket {
+            None
+        } else {
+            Some(args.control_socket)
+        };
+        return run_ble_gatt(router, options).await;
     }
 
     let router = RequestRouter::new(FakePlayerBackend::ready()).with_build_version("mba-bt-stdio");

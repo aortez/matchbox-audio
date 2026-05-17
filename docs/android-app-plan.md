@@ -201,7 +201,7 @@ Exit criteria:
 - [x] Verify chunked `system.hello` and `system.snapshot` over real BLE.
 - [ ] Verify oversized response rejection or pagination behavior.
 - [x] Add service logging for connection, disconnect, and protocol errors.
-- [ ] Add `mba-cli bt status`.
+- [x] Add `mba-cli bt status`.
 - [ ] Add `mba-cli bt pairing start --timeout <seconds>`.
 - [ ] Add `mba-cli bt pairing stop`.
 - [ ] Add `mba-cli bt clients`.
@@ -243,6 +243,19 @@ Phase 3 second-slice status:
   bytes after bluer's safety workaround, which is still comfortably above the
   protocol target GATT value size of 244 bytes.
 
+Phase 3 CLI status status:
+
+- `mba-bt --ble-local` serves a local admin socket at
+  `/tmp/mba-bt/control.sock`.
+- `mba-cli bt status` sends `bt.status` over that socket and prints adapter,
+  advertising, pairing, busy, active-client, and RX/TX counter state.
+- This socket is the local admin plane for the daemon. It is separate from the
+  Android-facing BLE GATT service and does not add any phone-visible BLE
+  characteristics.
+- The packaged socket path is `/run/mba-bt/control.sock`, created by
+  `mba-bt.service` through systemd's runtime directory support. Local developer
+  runs can still use `--control-socket /tmp/mba-bt/control.sock`.
+
 Exit criteria:
 
 - A real Android phone can connect to the Pi over BLE GATT.
@@ -252,10 +265,10 @@ Exit criteria:
 
 ## Phase 4: Device Packaging
 
-- [ ] Add `mba-bt.service`.
-- [ ] Add service hardening appropriate for BlueZ GATT/advertising access.
+- [x] Add `mba-bt.service`.
+- [x] Add service hardening appropriate for BlueZ GATT/advertising access.
 - [ ] Add persistent state directory under `/data/matchbox-audio/bt`.
-- [ ] Add Yocto install rules for `mba-bt`.
+- [x] Add Yocto install rules for `mba-bt`.
 - [ ] Include any required BlueZ config or policy.
 - [ ] Add remote smoke-test checks for:
   - [ ] service active

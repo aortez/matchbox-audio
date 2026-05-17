@@ -2,9 +2,11 @@ use serde::{Deserialize, Serialize};
 
 pub mod app;
 pub mod ble;
+pub mod bt_admin;
 
 pub use app::*;
 pub use ble::*;
+pub use bt_admin::*;
 
 pub const API_VERSION: &str = "v1";
 pub const APP_PROTOCOL_VERSION: u16 = 1;

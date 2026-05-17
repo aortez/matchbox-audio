@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Context;
 use bluer::{
@@ -13,10 +13,12 @@ use bluer::{
     },
     Address, Session, Uuid,
 };
-use futures_util::StreamExt;
+use futures_util::{FutureExt, StreamExt};
 use mba_protocol::{
-    ble, ErrorCode, ProtocolError, ProtocolMessage, APP_PROTOCOL_VERSION, DEFAULT_PAGE_LIMIT,
-    DEVICE_DISPLAY_NAME, MAX_MESSAGE_BYTES, MAX_PAGE_LIMIT, TARGET_RESPONSE_BYTES,
+    ble, BtActiveClientStatus, BtAdapterStatus, BtControlRequest, BtControlResponse, BtStatus,
+    ErrorCode, ProtocolError, ProtocolMessage, APP_PROTOCOL_VERSION, BT_CONTROL_METHOD_STATUS,
+    DEFAULT_BT_CONTROL_SOCKET, DEFAULT_PAGE_LIMIT, DEVICE_DISPLAY_NAME, MAX_MESSAGE_BYTES,
+    MAX_PAGE_LIMIT, SERVICE_NAME, TARGET_RESPONSE_BYTES,
 };
 use serde_json::json;
 use tokio::sync::{mpsc, RwLock};
@@ -26,6 +28,7 @@ use crate::{
     bad_request_for_transport_error, ActiveSession, BleTransportError, InMemoryBleTransport,
     PlayerBackend, RequestRouter, SessionGate,
 };
+use crate::{start_control_socket, ControlHandler};
 
 const SERVICE_UUID: Uuid = Uuid::from_u128(0x1cef04f1_966e_43ad_860f_086db4f277d6);
 const STATUS_UUID: Uuid = Uuid::from_u128(0xbd539314_4637_416b_a3b5_804fecd5b792);
@@ -36,6 +39,7 @@ const TX_UUID: Uuid = Uuid::from_u128(0xfcc9055c_34e3_46d9_a010_bd8a4f180b0c);
 pub struct BleGattOptions {
     pub device_name: String,
     pub pairing_state: String,
+    pub control_socket: Option<PathBuf>,
 }
 
 impl Default for BleGattOptions {
@@ -43,6 +47,7 @@ impl Default for BleGattOptions {
         Self {
             device_name: DEVICE_DISPLAY_NAME.to_string(),
             pairing_state: "local".to_string(),
+            control_socket: Some(DEFAULT_BT_CONTROL_SOCKET.into()),
         }
     }
 }
@@ -221,6 +226,12 @@ struct BleActiveClientSnapshot {
     session_token: u64,
 }
 
+#[derive(Debug, Clone)]
+struct BleAdapterSnapshot {
+    name: String,
+    address: String,
+}
+
 impl From<&BleActiveSession> for BleActiveClientSnapshot {
     fn from(session: &BleActiveSession) -> Self {
         Self {
@@ -259,8 +270,13 @@ where
         warn!(%error, "failed to set adapter alias; continuing");
     }
 
+    let adapter_name = adapter.name().to_string();
     let address = adapter.address().await?;
-    info!(adapter = %adapter.name(), %address, "using Bluetooth adapter");
+    let adapter_snapshot = BleAdapterSnapshot {
+        name: adapter_name.clone(),
+        address: address.to_string(),
+    };
+    info!(adapter = %adapter_name, %address, "using Bluetooth adapter");
 
     let (app, tx_control) = build_gatt_application(Arc::clone(&state), options.clone());
     let _app_handle = adapter
@@ -283,12 +299,92 @@ where
         .context("failed to start BLE advertisement")?;
     info!(name = %options.device_name, "advertising started");
 
+    let _control_socket = match options.control_socket.clone() {
+        Some(path) => Some(start_ble_control_socket(
+            path,
+            Arc::clone(&state),
+            options.clone(),
+            adapter_snapshot,
+        )?),
+        None => None,
+    };
+
     tokio::signal::ctrl_c()
         .await
         .context("failed waiting for Ctrl-C")?;
 
     info!("stopping Matchbox BLE GATT transport");
     Ok(())
+}
+
+fn start_ble_control_socket<P>(
+    path: PathBuf,
+    state: Arc<RwLock<BleGattState<P>>>,
+    options: BleGattOptions,
+    adapter: BleAdapterSnapshot,
+) -> anyhow::Result<crate::ControlSocketGuard>
+where
+    P: PlayerBackend,
+{
+    let handler: ControlHandler = Arc::new(move |request| {
+        let state = Arc::clone(&state);
+        let options = options.clone();
+        let adapter = adapter.clone();
+        async move { handle_control_request(state, options, adapter, request).await }.boxed()
+    });
+    start_control_socket(path, handler)
+}
+
+async fn handle_control_request<P>(
+    state: Arc<RwLock<BleGattState<P>>>,
+    options: BleGattOptions,
+    adapter: BleAdapterSnapshot,
+    request: BtControlRequest,
+) -> BtControlResponse
+where
+    P: PlayerBackend,
+{
+    match request.method.as_str() {
+        BT_CONTROL_METHOD_STATUS => {
+            let state = state.read().await;
+            BtControlResponse::ok_status(bt_status(&options, &adapter, &state.status_snapshot()))
+        }
+        method => BtControlResponse::error(
+            "unsupported_method",
+            format!("unsupported bt control method: {method}"),
+        ),
+    }
+}
+
+fn bt_status(
+    options: &BleGattOptions,
+    adapter: &BleAdapterSnapshot,
+    snapshot: &BleGattStatusSnapshot,
+) -> BtStatus {
+    BtStatus {
+        service: SERVICE_NAME.to_string(),
+        transport: "mba-bt-ble-local".to_string(),
+        device_name: options.device_name.clone(),
+        adapter: Some(BtAdapterStatus {
+            name: adapter.name.clone(),
+            address: adapter.address.clone(),
+        }),
+        advertising: true,
+        service_uuid: SERVICE_UUID.to_string(),
+        pairing_state: options.pairing_state.clone(),
+        busy: snapshot.busy,
+        active_client: snapshot
+            .active_client
+            .as_ref()
+            .map(|client| BtActiveClientStatus {
+                address: client.address.to_string(),
+                adapter: client.adapter_name.clone(),
+                mtu: client.mtu,
+                session_token: client.session_token,
+            }),
+        rx_chunk_writes: snapshot.rx_count,
+        tx_chunks_sent: snapshot.tx_sent_count,
+    }
 }
 
 fn build_gatt_application<P>(

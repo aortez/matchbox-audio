@@ -13,6 +13,9 @@ CARGO_MANIFEST_PATH = "${MATCHBOX_AUDIO_SRCROOT}/Cargo.toml"
 EXTRA_CARGO_FLAGS = "--locked --workspace"
 EXTRA_RUSTFLAGS += "--remap-path-prefix=${WORKDIR}=${TARGET_DBGSRC_DIR}"
 
+DEPENDS = "dbus pkgconfig-native"
+RDEPENDS:${PN} += "bluez5 dbus"
+
 # The 32-bit ARM Rust libc stack still trips Yocto's time64 QA heuristic.
 # Yocto's cargo_common class applies the same skip for source-built Rust crates.
 INSANE_SKIP += "32bit-time"
@@ -53,6 +56,7 @@ python () {
                 f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-ab-update:True",
                 f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-boot-config:True",
                 f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-data-init:True",
+                f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-bt.service:True",
                 f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-data-init.service:True",
                 f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-device.service:True",
                 f"{srcroot}/yocto/meta-matchbox-audio/recipes-matchbox-audio/matchbox-audio/files/mba-mpd-startup-volume:True",
@@ -70,6 +74,7 @@ do_install() {
     install -m 0755 ${CARGO_BINDIR}/mba-player ${D}${bindir}/mba-player
     install -m 0755 ${CARGO_BINDIR}/mba-cli ${D}${bindir}/mba-cli
     install -m 0755 ${CARGO_BINDIR}/mba-device ${D}${bindir}/mba-device
+    install -m 0755 ${CARGO_BINDIR}/mba-bt ${D}${bindir}/mba-bt
     install -m 0755 ${THISDIR}/files/mba-ab-update ${D}${bindir}/mba-ab-update
     install -m 0755 ${THISDIR}/files/mba-boot-config ${D}${bindir}/mba-boot-config
     install -m 0755 ${THISDIR}/files/mba-mpd-startup-volume ${D}${bindir}/mba-mpd-startup-volume
@@ -81,17 +86,19 @@ do_install() {
     install -m 0644 ${THISDIR}/files/mba-data-init.service ${D}${systemd_system_unitdir}/mba-data-init.service
     install -m 0644 ${THISDIR}/files/mba-player.service ${D}${systemd_system_unitdir}/mba-player.service
     install -m 0644 ${THISDIR}/files/mba-device.service ${D}${systemd_system_unitdir}/mba-device.service
+    install -m 0644 ${THISDIR}/files/mba-bt.service ${D}${systemd_system_unitdir}/mba-bt.service
     install -m 0644 ${THISDIR}/files/mba-mpd-startup-volume.service ${D}${systemd_system_unitdir}/mba-mpd-startup-volume.service
     install -m 0644 ${THISDIR}/files/mba-network-mode-restore.service ${D}${systemd_system_unitdir}/mba-network-mode-restore.service
 }
 
-SYSTEMD_SERVICE:${PN} = "mba-data-init.service mba-network-mode-restore.service mba-mpd-startup-volume.service mba-player.service mba-device.service"
+SYSTEMD_SERVICE:${PN} = "mba-data-init.service mba-network-mode-restore.service mba-mpd-startup-volume.service mba-player.service mba-device.service mba-bt.service"
 SYSTEMD_AUTO_ENABLE = "enable"
 
 FILES:${PN} = " \
     ${bindir}/mba-player \
     ${bindir}/mba-cli \
     ${bindir}/mba-device \
+    ${bindir}/mba-bt \
     ${bindir}/mba-ab-update \
     ${bindir}/mba-boot-config \
     ${bindir}/mba-mpd-startup-volume \
@@ -100,6 +107,7 @@ FILES:${PN} = " \
     ${systemd_system_unitdir}/mba-data-init.service \
     ${systemd_system_unitdir}/mba-player.service \
     ${systemd_system_unitdir}/mba-device.service \
+    ${systemd_system_unitdir}/mba-bt.service \
     ${systemd_system_unitdir}/mba-mpd-startup-volume.service \
     ${systemd_system_unitdir}/mba-network-mode-restore.service \
 "
