@@ -51,6 +51,7 @@ enum class BleConnectionPhase {
     Ready,
     Disconnected,
     Failed,
+    AuthRequired,
     Busy,
 }
 
@@ -140,6 +141,7 @@ class BleMatchboxTransport(
                 BleConnectionPhase.Idle,
                 BleConnectionPhase.Disconnected,
                 BleConnectionPhase.Failed,
+                BleConnectionPhase.AuthRequired,
                 BleConnectionPhase.Busy,
                 -> connectOnMain()
             }
@@ -149,6 +151,7 @@ class BleMatchboxTransport(
             connectionState.first {
                 it.phase == BleConnectionPhase.Ready ||
                     it.phase == BleConnectionPhase.Failed ||
+                    it.phase == BleConnectionPhase.AuthRequired ||
                     it.phase == BleConnectionPhase.Busy ||
                     it.phase == BleConnectionPhase.Disconnected
             }
@@ -228,6 +231,7 @@ class BleMatchboxTransport(
             BleConnectionPhase.Idle,
             BleConnectionPhase.Disconnected,
             BleConnectionPhase.Failed,
+            BleConnectionPhase.AuthRequired,
             BleConnectionPhase.Busy,
             -> Unit
         }
@@ -584,6 +588,10 @@ class BleMatchboxTransport(
         }
 
         val protocolError = BleProtocolMessages.errorFromResponse(root)
+        if (protocolError?.code == BleProtocolMessages.ERROR_AUTH_REQUIRED) {
+            markAuthRequiredOnMain()
+            return
+        }
         if (protocolError?.code == BleProtocolMessages.ERROR_BUSY) {
             markBusyOnMain()
             return
@@ -791,6 +799,20 @@ class BleMatchboxTransport(
 
     private fun markBusyOnMain() {
         val message = "Another app is connected"
+        markProtocolTerminalOnMain(
+            phase = BleConnectionPhase.Busy,
+            message = message,
+        )
+    }
+
+    private fun markAuthRequiredOnMain() {
+        markProtocolTerminalOnMain(
+            phase = BleConnectionPhase.AuthRequired,
+            message = "Open pairing mode on Matchbox Audio",
+        )
+    }
+
+    private fun markProtocolTerminalOnMain(phase: BleConnectionPhase, message: String) {
         val error = BleTransportException(message)
         val current = _connectionState.value
         mainHandler.removeCallbacks(reconnectTimeoutRunnable)
@@ -799,7 +821,7 @@ class BleMatchboxTransport(
         resetProtocolStateOnMain()
         completePendingRequests(error)
         _connectionState.value = BleConnectionState(
-            phase = BleConnectionPhase.Busy,
+            phase = phase,
             deviceName = current.deviceName,
             deviceAddress = current.deviceAddress,
             mtu = current.mtu,

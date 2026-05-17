@@ -97,6 +97,25 @@ class NowPlayingScreenTest {
     }
 
     @Test
+    fun authRequiredStateShowsAuthorizationStatus() {
+        compose.setContent {
+            NowPlayingScreen(
+                state = NowPlayingUiState.failed("Open pairing mode on Matchbox Audio"),
+                onRefresh = {},
+                usingBle = true,
+                bleConnectionState = BleConnectionState(
+                    phase = BleConnectionPhase.AuthRequired,
+                    errorMessage = "Open pairing mode on Matchbox Audio",
+                ),
+            )
+        }
+
+        compose.onNodeWithTag("connection-status").assertIsDisplayed()
+        compose.onAllNodesWithText("Authorization required").assertCountEquals(2)
+        compose.onAllNodesWithText("Open pairing mode on Matchbox Audio").assertCountEquals(2)
+    }
+
+    @Test
     fun permissionDeniedShowsBluetoothStatus() {
         compose.setContent {
             NowPlayingScreen(

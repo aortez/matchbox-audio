@@ -222,6 +222,8 @@ private fun ConnectionStatusRow(
     }
     val detail = when {
         permissionDenied -> "Grant Bluetooth access to connect"
+        usingBle && bleConnectionState.phase == BleConnectionPhase.AuthRequired ->
+            "Open pairing mode on Matchbox Audio"
         usingBle && bleConnectionState.phase == BleConnectionPhase.Busy -> "Another app is connected"
         usingBle && bleConnectionState.errorMessage != null -> bleConnectionState.errorMessage
         usingBle && bleConnectionState.deviceName != null -> bleConnectionState.deviceName
@@ -358,6 +360,7 @@ private fun blePhaseLabel(phase: BleConnectionPhase): String =
         BleConnectionPhase.Ready -> "BLE ready"
         BleConnectionPhase.Disconnected -> "BLE disconnected"
         BleConnectionPhase.Failed -> "BLE failed"
+        BleConnectionPhase.AuthRequired -> "Authorization required"
         BleConnectionPhase.Busy -> "Device busy"
     }
 

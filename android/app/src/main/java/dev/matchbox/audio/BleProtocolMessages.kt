@@ -8,6 +8,7 @@ data class BleProtocolErrorDetails(
 )
 
 object BleProtocolMessages {
+    const val ERROR_AUTH_REQUIRED = "auth_required"
     const val ERROR_BUSY = "busy"
 
     fun errorFromResponse(root: JSONObject): BleProtocolErrorDetails? {
@@ -34,6 +35,7 @@ object BleProtocolMessages {
 
     fun userFacingMessage(error: BleProtocolErrorDetails): String =
         when (error.code) {
+            ERROR_AUTH_REQUIRED -> "Open pairing mode on Matchbox Audio"
             ERROR_BUSY -> "Another app is connected"
             else -> error.message
         }

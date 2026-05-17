@@ -479,6 +479,14 @@ Phase 6 busy-device status:
   idle, and the normal Pixel reconnect plus lock/unlock smoke completed after
   the busy-device check.
 
+Phase 6 auth-required status:
+
+- Android now maps protocol error code `auth_required` into a dedicated
+  `Authorization required` BLE phase instead of a generic failure.
+- The UI tells the user to open pairing mode on Matchbox Audio, closes the
+  rejected GATT attempt, and allows a later refresh/connect attempt to retry
+  after pairing mode is opened.
+
 ## Phase 6: Android BLE Connection
 
 - [x] Add BLE scan/association flow.
@@ -490,7 +498,7 @@ Phase 6 busy-device status:
 - [x] Add protocol read/write loop.
 - [x] Add connection status UI.
 - [x] Add permission-denied UI.
-- [ ] Add auth-required UI.
+- [x] Add auth-required UI.
 - [x] Add busy-device UI.
 - [ ] Add reconnect backoff.
 - [ ] Add tests for connection state-machine behavior.

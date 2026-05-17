@@ -496,6 +496,23 @@ async function connectFromForeground(serial) {
   }
 }
 
+async function refreshFromForeground(serial) {
+  const ready = await waitForText(
+    serial,
+    ['Refresh'],
+    10_000,
+  );
+  if (!ready) {
+    throw new Error('Timed out waiting for Android app Refresh action');
+  }
+
+  const point = findTextCenter(ready.xml, 'Refresh');
+  if (!point) {
+    throw new Error('Could not find Refresh bounds after it became visible');
+  }
+  adb(serial, 'shell', 'input', 'tap', String(point.x), String(point.y));
+}
+
 async function waitForAndroidValues(serial, expected, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let lastTexts = [];
@@ -566,6 +583,7 @@ async function launchConnectAndVerify(serial, activity, expected, timeoutMs) {
   await sleep(250);
   maybeTapText(serial, 'Allow');
   maybeTapText(serial, 'While using the app');
+  await refreshFromForeground(serial);
 
   const phase = await waitForAnyAndroidText(
     serial,

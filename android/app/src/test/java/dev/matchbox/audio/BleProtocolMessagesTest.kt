@@ -33,6 +33,32 @@ class BleProtocolMessagesTest {
     }
 
     @Test
+    fun extractsAuthRequiredErrorResponse() {
+        val root = JSONObject(
+            """
+            {
+              "type": "response",
+              "id": 2,
+              "ok": false,
+              "error": {
+                "code": "auth_required",
+                "message": "pairing mode is required"
+              }
+            }
+            """.trimIndent(),
+        )
+
+        val error = BleProtocolMessages.errorFromResponse(root)
+
+        assertEquals("auth_required", error?.code)
+        assertEquals("auth_required: pairing mode is required", error?.message)
+        assertEquals(
+            "Open pairing mode on Matchbox Audio",
+            error?.let(BleProtocolMessages::userFacingMessage),
+        )
+    }
+
+    @Test
     fun ignoresSuccessfulResponses() {
         val root = JSONObject("""{"type":"response","id":1,"ok":true,"result":{}}""")
 
