@@ -62,7 +62,8 @@ tools/android-real-ble-smoke.mjs --timeout 45000
 It installs `android/app`, wakes the phone, clears stale app sessions, verifies
 that the Pi BLE daemon is advertising and idle, reads the Pi player status,
 launches the Android app, taps **Connect BLE**, waits until the app UI matches
-the Pi status, and saves a screenshot to
+the Pi status, verifies known-device persistence, force-stops and relaunches
+the app to exercise reconnect, and saves a screenshot to
 `/tmp/matchbox-android-real-ble-smoke.png`.
 
 The helper uses `JAVA_HOME` when it points at a JDK with `bin/javac`; otherwise
@@ -70,6 +71,7 @@ it tries Android Studio's bundled JBR at
 `/home/oldman/.progs/android-studio/jbr`. Use `--java-home <path>` to override
 that detection.
 
+Use `--no-restart-check` to skip the force-stop/relaunch reconnect pass.
 Use `--skip-install` when the current APK is already installed.
 
 1. Deploy the current image and run the device smoke checks:

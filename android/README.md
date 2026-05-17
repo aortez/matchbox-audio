@@ -44,9 +44,10 @@ Run the real Pi plus Android BLE smoke helper:
 
 The helper installs the debug APK, connects the app over BLE, compares the
 visible now-playing fields with `http://matchbox-audio.local:8090/api/v1/status`,
-and captures `/tmp/matchbox-android-real-ble-smoke.png`. It uses `JAVA_HOME`
-when that points at a JDK with `bin/javac`; otherwise it tries Android Studio's
-bundled JBR at `/home/oldman/.progs/android-studio/jbr`.
+verifies known-device persistence, force-stops and relaunches the app to
+exercise reconnect, and captures `/tmp/matchbox-android-real-ble-smoke.png`.
+It uses `JAVA_HOME` when that points at a JDK with `bin/javac`; otherwise it
+tries Android Studio's bundled JBR at `/home/oldman/.progs/android-studio/jbr`.
 
 The checked-in Gradle project expects a local Android SDK. Keep
 `local.properties` out of git; Android Studio can generate it, or copy the SDK
@@ -55,4 +56,4 @@ path used by another local Android project.
 The checked-in UI still uses `FakeMatchboxTransport`. The BLE transport exists
 behind `MatchboxTransport`, and the app has a Connect BLE action that requests
 runtime Bluetooth permissions before switching the now-playing view to the BLE
-transport. Known-device reconnect behavior is still pending.
+transport.

@@ -22,7 +22,8 @@ object BleProtocol {
     const val TARGET_CHUNK_PAYLOAD_BYTES = TARGET_GATT_VALUE_BYTES - CHUNK_HEADER_BYTES
     const val REQUESTED_MTU = 517
     const val SCAN_TIMEOUT_MILLIS = 10_000L
-    const val CONNECT_TIMEOUT_MILLIS = 20_000L
+    const val RECONNECT_TIMEOUT_MILLIS = 6_000L
+    const val CONNECT_TIMEOUT_MILLIS = 30_000L
     const val RESPONSE_TIMEOUT_MILLIS = 10_000L
 
     internal const val CHUNK_MAGIC_0 = 'M'.code.toByte()

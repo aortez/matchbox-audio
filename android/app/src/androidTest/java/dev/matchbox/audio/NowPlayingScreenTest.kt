@@ -59,6 +59,25 @@ class NowPlayingScreenTest {
     }
 
     @Test
+    fun reconnectingStateShowsConnectionStatus() {
+        compose.setContent {
+            NowPlayingScreen(
+                state = NowPlayingUiState.ready(FakeSnapshots.nowPlaying),
+                onRefresh = {},
+                usingBle = true,
+                bleConnectionState = BleConnectionState(
+                    phase = BleConnectionPhase.Reconnecting,
+                    deviceName = "Matchbox Audio",
+                ),
+            )
+        }
+
+        compose.onNodeWithTag("connection-status").assertIsDisplayed()
+        compose.onAllNodesWithText("Reconnecting").assertCountEquals(2)
+        compose.onAllNodesWithText("Matchbox Audio").assertCountEquals(2)
+    }
+
+    @Test
     fun permissionDeniedShowsBluetoothStatus() {
         compose.setContent {
             NowPlayingScreen(

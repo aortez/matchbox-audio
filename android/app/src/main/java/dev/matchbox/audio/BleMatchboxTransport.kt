@@ -41,6 +41,7 @@ import java.nio.charset.StandardCharsets
 
 enum class BleConnectionPhase {
     Idle,
+    Reconnecting,
     Scanning,
     Connecting,
     RequestingMtu,
@@ -66,6 +67,7 @@ class BleTransportException(message: String) : IllegalStateException(message)
 class BleMatchboxTransport(
     context: Context,
     private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
+    private val knownDeviceStore: BleKnownDeviceStore = SharedPreferencesBleKnownDeviceStore(context),
 ) : MatchboxTransport {
     private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -90,6 +92,11 @@ class BleMatchboxTransport(
     private val scanTimeoutRunnable = Runnable {
         if (_connectionState.value.phase == BleConnectionPhase.Scanning) {
             failOnMain("No Matchbox BLE device found before scan timeout")
+        }
+    }
+    private val reconnectTimeoutRunnable = Runnable {
+        if (_connectionState.value.phase == BleConnectionPhase.Reconnecting) {
+            startScanFallbackOnMain()
         }
     }
 
@@ -120,6 +127,7 @@ class BleMatchboxTransport(
         withContext(mainDispatcher) {
             when (_connectionState.value.phase) {
                 BleConnectionPhase.Ready,
+                BleConnectionPhase.Reconnecting,
                 BleConnectionPhase.Scanning,
                 BleConnectionPhase.Connecting,
                 BleConnectionPhase.RequestingMtu,
@@ -204,6 +212,7 @@ class BleMatchboxTransport(
 
     private fun connectOnMain() {
         when (_connectionState.value.phase) {
+            BleConnectionPhase.Reconnecting,
             BleConnectionPhase.Scanning,
             BleConnectionPhase.Connecting,
             BleConnectionPhase.RequestingMtu,
@@ -234,15 +243,54 @@ class BleMatchboxTransport(
             return
         }
 
+        stopScanOnMain()
+        closeGattOnMain(updateState = false)
+        resetProtocolStateOnMain()
+
+        val knownDevice = knownDeviceStore.load()
+        if (knownDevice != null && connectToKnownDeviceOnMain(adapter, knownDevice)) {
+            return
+        }
+
+        startScanOnMain(adapter)
+    }
+
+    private fun connectToKnownDeviceOnMain(
+        adapter: BluetoothAdapter,
+        knownDevice: BleKnownDevice,
+    ): Boolean {
+        val device = try {
+            adapter.getRemoteDevice(knownDevice.address)
+        } catch (_: IllegalArgumentException) {
+            knownDeviceStore.clear()
+            null
+        } ?: return false
+
+        return connectToDeviceOnMain(
+            device = device,
+            phase = BleConnectionPhase.Reconnecting,
+            fallbackName = knownDevice.name,
+        )
+    }
+
+    private fun startScanFallbackOnMain() {
+        closeGattOnMain(updateState = false)
+        resetProtocolStateOnMain()
+        val adapter = bluetoothAdapter()
+        if (adapter == null || !adapter.isEnabled) {
+            failOnMain("Bluetooth adapter unavailable or disabled")
+            return
+        }
+        startScanOnMain(adapter)
+    }
+
+    private fun startScanOnMain(adapter: BluetoothAdapter) {
         val nextScanner = adapter.bluetoothLeScanner
         if (nextScanner == null) {
             failOnMain("Bluetooth LE scanner unavailable")
             return
         }
 
-        stopScanOnMain()
-        closeGattOnMain(updateState = false)
-        resetProtocolStateOnMain()
         scanner = nextScanner
         _connectionState.value = BleConnectionState(phase = BleConnectionPhase.Scanning)
 
@@ -264,16 +312,20 @@ class BleMatchboxTransport(
     }
 
     @SuppressLint("MissingPermission")
-    private fun connectToDeviceOnMain(device: BluetoothDevice) {
+    private fun connectToDeviceOnMain(
+        device: BluetoothDevice,
+        phase: BleConnectionPhase = BleConnectionPhase.Connecting,
+        fallbackName: String? = null,
+    ): Boolean {
         if (!hasConnectPermission()) {
             failOnMain("Missing Android Bluetooth connect permission")
-            return
+            return false
         }
 
-        val deviceName = safeDeviceName(device)
+        val deviceName = safeDeviceName(device) ?: fallbackName
         val deviceAddress = safeDeviceAddress(device)
         _connectionState.value = BleConnectionState(
-            phase = BleConnectionPhase.Connecting,
+            phase = phase,
             deviceName = deviceName,
             deviceAddress = deviceAddress,
         )
@@ -287,6 +339,13 @@ class BleMatchboxTransport(
             failOnMain("Android denied GATT connect: ${error.message ?: "missing permission"}")
             null
         }
+        if (gatt == null) {
+            return false
+        }
+        if (phase == BleConnectionPhase.Reconnecting) {
+            mainHandler.postDelayed(reconnectTimeoutRunnable, BleProtocol.RECONNECT_TIMEOUT_MILLIS)
+        }
+        return true
     }
 
     @SuppressLint("MissingPermission")
@@ -412,6 +471,7 @@ class BleMatchboxTransport(
             phase = BleConnectionPhase.Ready,
             errorMessage = null,
         )
+        rememberConnectedDeviceOnMain()
     }
 
     private fun enqueueRequestOnMain(
@@ -541,7 +601,9 @@ class BleMatchboxTransport(
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             runOnMain {
                 stopScanOnMain()
-                connectToDeviceOnMain(result.device)
+                if (!connectToDeviceOnMain(result.device)) {
+                    failOnMain("GATT connection did not queue")
+                }
             }
         }
 
@@ -556,7 +618,11 @@ class BleMatchboxTransport(
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             runOnMain {
+                if (!isCurrentGattOnMain(gatt)) {
+                    return@runOnMain
+                }
                 if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED) {
+                    mainHandler.removeCallbacks(reconnectTimeoutRunnable)
                     this@BleMatchboxTransport.gatt = gatt
                     _connectionState.value = _connectionState.value.copy(
                         phase = BleConnectionPhase.RequestingMtu,
@@ -566,25 +632,38 @@ class BleMatchboxTransport(
                         discoverServicesOnMain(gatt)
                     }
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                    val wasReconnecting =
+                        _connectionState.value.phase == BleConnectionPhase.Reconnecting
                     completePendingRequests(BleTransportException("BLE GATT disconnected"))
                     closeGattOnMain(updateState = false)
                     resetProtocolStateOnMain()
-                    _connectionState.value = _connectionState.value.copy(
-                        phase = BleConnectionPhase.Disconnected,
-                        errorMessage = if (status == BluetoothGatt.GATT_SUCCESS) {
-                            null
-                        } else {
-                            "BLE GATT disconnected with status $status"
-                        },
-                    )
+                    if (wasReconnecting) {
+                        startScanFallbackOnMain()
+                    } else {
+                        _connectionState.value = _connectionState.value.copy(
+                            phase = BleConnectionPhase.Disconnected,
+                            errorMessage = if (status == BluetoothGatt.GATT_SUCCESS) {
+                                null
+                            } else {
+                                "BLE GATT disconnected with status $status"
+                            },
+                        )
+                    }
                 } else if (status != BluetoothGatt.GATT_SUCCESS) {
-                    failOnMain("BLE GATT connection failed: $status")
+                    if (_connectionState.value.phase == BleConnectionPhase.Reconnecting) {
+                        startScanFallbackOnMain()
+                    } else {
+                        failOnMain("BLE GATT connection failed: $status")
+                    }
                 }
             }
         }
 
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
             runOnMain {
+                if (!isCurrentGattOnMain(gatt)) {
+                    return@runOnMain
+                }
                 _connectionState.value = _connectionState.value.copy(
                     mtu = if (status == BluetoothGatt.GATT_SUCCESS) mtu else null,
                     errorMessage = null,
@@ -595,6 +674,9 @@ class BleMatchboxTransport(
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             runOnMain {
+                if (!isCurrentGattOnMain(gatt)) {
+                    return@runOnMain
+                }
                 handleServicesDiscoveredOnMain(gatt, status)
             }
         }
@@ -606,6 +688,9 @@ class BleMatchboxTransport(
             status: Int,
         ) {
             runOnMain {
+                if (!isCurrentGattOnMain(gatt)) {
+                    return@runOnMain
+                }
                 handleCharacteristicReadOnMain(characteristic, value, status)
             }
         }
@@ -617,6 +702,9 @@ class BleMatchboxTransport(
             status: Int,
         ) {
             runOnMain {
+                if (!isCurrentGattOnMain(gatt)) {
+                    return@runOnMain
+                }
                 handleCharacteristicReadOnMain(characteristic, characteristic.value, status)
             }
         }
@@ -627,6 +715,9 @@ class BleMatchboxTransport(
             status: Int,
         ) {
             runOnMain {
+                if (!isCurrentGattOnMain(gatt)) {
+                    return@runOnMain
+                }
                 handleDescriptorWriteOnMain(descriptor, status)
             }
         }
@@ -637,6 +728,9 @@ class BleMatchboxTransport(
             status: Int,
         ) {
             runOnMain {
+                if (!isCurrentGattOnMain(gatt)) {
+                    return@runOnMain
+                }
                 if (characteristic.uuid == BleProtocol.RX_UUID) {
                     handleCharacteristicWriteOnMain(status)
                 }
@@ -649,6 +743,9 @@ class BleMatchboxTransport(
             value: ByteArray,
         ) {
             runOnMain {
+                if (!isCurrentGattOnMain(gatt)) {
+                    return@runOnMain
+                }
                 handleNotificationOnMain(characteristic, value)
             }
         }
@@ -659,6 +756,9 @@ class BleMatchboxTransport(
             characteristic: BluetoothGattCharacteristic,
         ) {
             runOnMain {
+                if (!isCurrentGattOnMain(gatt)) {
+                    return@runOnMain
+                }
                 handleNotificationOnMain(characteristic, characteristic.value)
             }
         }
@@ -675,8 +775,20 @@ class BleMatchboxTransport(
         txCharacteristic = null
     }
 
+    private fun rememberConnectedDeviceOnMain() {
+        val state = _connectionState.value
+        val address = state.deviceAddress?.takeIf(BleDeviceAddresses::isValid) ?: return
+        knownDeviceStore.save(
+            BleKnownDevice(
+                address = address,
+                name = state.deviceName,
+            ),
+        )
+    }
+
     private fun failOnMain(message: String) {
         val error = BleTransportException(message)
+        mainHandler.removeCallbacks(reconnectTimeoutRunnable)
         stopScanOnMain()
         closeGattOnMain(updateState = false)
         resetProtocolStateOnMain()
@@ -709,6 +821,7 @@ class BleMatchboxTransport(
 
     @SuppressLint("MissingPermission")
     private fun closeGattOnMain(updateState: Boolean) {
+        mainHandler.removeCallbacks(reconnectTimeoutRunnable)
         val currentGatt = gatt ?: return
         gatt = null
         if (hasConnectPermission()) {
@@ -726,6 +839,9 @@ class BleMatchboxTransport(
             _connectionState.value = _connectionState.value.copy(phase = BleConnectionPhase.Disconnected)
         }
     }
+
+    private fun isCurrentGattOnMain(callbackGatt: BluetoothGatt): Boolean =
+        gatt === callbackGatt
 
     private fun nextTransportMessageId(): Long {
         val messageId = nextTransportMessageId

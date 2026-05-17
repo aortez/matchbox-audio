@@ -86,6 +86,7 @@ Options:
   --app-dir <path>     Android Gradle project dir (default: android/)
   --java-home <path>   JDK for Gradle installDebug
   --skip-install       Do not run ./gradlew installDebug first
+  --no-restart-check   Skip force-stop/relaunch reconnect verification
   --output <path>      Screenshot output path (default: ${DEFAULT_OUTPUT})
   --timeout <ms>       BLE/UI wait timeout (default: ${DEFAULT_TIMEOUT_MS})
   -h, --help           Show this help
@@ -171,6 +172,10 @@ function adb(serial, ...args) {
 function adbAllowFailure(serial, ...args) {
   const adbArgs = serial ? ['-s', serial, ...args] : args;
   return run('adb', adbArgs, { allowFailure: true, timeout: 30_000 });
+}
+
+function forceStopApp(serial, appId) {
+  adbAllowFailure(serial, 'shell', 'am', 'force-stop', appId);
 }
 
 function ssh(remoteTarget, command) {
@@ -373,6 +378,21 @@ function maybeTapText(serial, text) {
   return true;
 }
 
+async function waitForAnyAndroidText(serial, expected, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const texts = visibleTexts(dumpUi(serial));
+    const match = expected.find(value => texts.includes(value));
+    if (match) {
+      return match;
+    }
+    await sleep(250);
+  }
+
+  return null;
+}
+
 async function waitForAndroidValues(serial, expected, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let lastTexts = [];
@@ -406,6 +426,57 @@ function captureScreenshot(serial, output) {
   writeFileSync(output, result.stdout);
 }
 
+function knownDevicePrefs(serial, appId) {
+  const result = adbAllowFailure(
+    serial,
+    'shell',
+    'run-as',
+    appId,
+    'cat',
+    'shared_prefs/matchbox_ble.xml',
+  );
+  const text = commandText(result);
+  return { ok: result.status === 0, text };
+}
+
+async function waitForKnownDeviceStored(serial, appId, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let lastResult = { ok: false, text: '' };
+
+  while (Date.now() < deadline) {
+    lastResult = knownDevicePrefs(serial, appId);
+    if (lastResult.ok && lastResult.text.includes('known_device_address')) {
+      return;
+    }
+    await sleep(250);
+  }
+
+  if (!lastResult.ok) {
+    throw new Error(`Could not read app BLE preferences with run-as:\n${lastResult.text}`);
+  }
+  throw new Error(`BLE known-device preference was not written:\n${lastResult.text}`);
+}
+
+async function launchConnectAndVerify(serial, activity, expected, timeoutMs) {
+  adb(serial, 'shell', 'am', 'start', '-n', activity);
+  await sleep(1000);
+  maybeTapText(serial, 'Connect BLE');
+  await sleep(250);
+  maybeTapText(serial, 'Allow');
+  maybeTapText(serial, 'While using the app');
+
+  const phase = await waitForAnyAndroidText(
+    serial,
+    ['Reconnecting', 'Scanning', 'Connecting', 'BLE ready'],
+    3000,
+  );
+  if (phase) {
+    info(`Observed Android BLE phase: ${phase}`);
+  }
+
+  await waitForAndroidValues(serial, expected, timeoutMs);
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (flag(args, '-h') || flag(args, '--help')) {
@@ -422,6 +493,7 @@ async function main() {
   const appDir = resolve(repoRoot, argValue(args, '--app-dir', 'android'));
   const explicitJavaHome = argProvided(args, '--java-home') ? argValue(args, '--java-home', '') : '';
   const skipInstall = flag(args, '--skip-install');
+  const restartCheck = !flag(args, '--no-restart-check');
   const output = argValue(args, '--output', DEFAULT_OUTPUT);
   const timeoutMs = Number(argValue(args, '--timeout', String(DEFAULT_TIMEOUT_MS)));
   const baseUrl = `http://${host}:8090`;
@@ -453,8 +525,8 @@ async function main() {
   adbAllowFailure(deviceSerial, 'shell', 'wm', 'dismiss-keyguard');
   adbAllowFailure(deviceSerial, 'shell', 'pm', 'grant', appId, 'android.permission.BLUETOOTH_SCAN');
   adbAllowFailure(deviceSerial, 'shell', 'pm', 'grant', appId, 'android.permission.BLUETOOTH_CONNECT');
-  adbAllowFailure(deviceSerial, 'shell', 'am', 'force-stop', appId);
-  adbAllowFailure(deviceSerial, 'shell', 'am', 'force-stop', SMOKE_APP_ID);
+  forceStopApp(deviceSerial, appId);
+  forceStopApp(deviceSerial, SMOKE_APP_ID);
   await sleep(1500);
   success('Phone ready');
 
@@ -470,15 +542,22 @@ async function main() {
   success('Pi status ready');
 
   info('Launching Android app and connecting BLE');
-  adb(deviceSerial, 'shell', 'am', 'start', '-n', activity);
-  await sleep(1000);
-  maybeTapText(deviceSerial, 'Connect BLE');
-  await sleep(1000);
-  maybeTapText(deviceSerial, 'Allow');
-  maybeTapText(deviceSerial, 'While using the app');
-
-  await waitForAndroidValues(deviceSerial, expected, timeoutMs);
+  await launchConnectAndVerify(deviceSerial, activity, expected, timeoutMs);
   success('Android BLE snapshot matches Pi status');
+  await waitForKnownDeviceStored(deviceSerial, appId, timeoutMs);
+  success('Android app stored known BLE device');
+
+  if (restartCheck) {
+    info('Force-stopping Android app for reconnect check');
+    forceStopApp(deviceSerial, appId);
+    await sleep(1500);
+    await waitForBtIdle(remoteTarget, timeoutMs);
+    success('Pi BLE returned to idle after app stop');
+
+    info('Relaunching Android app for known-device reconnect check');
+    await launchConnectAndVerify(deviceSerial, activity, expected, timeoutMs);
+    success('Android BLE reconnect after app restart matches Pi status');
+  }
 
   captureScreenshot(deviceSerial, output);
   success(`Screenshot captured: ${output}`);

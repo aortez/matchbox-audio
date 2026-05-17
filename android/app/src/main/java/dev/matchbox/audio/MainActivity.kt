@@ -347,6 +347,7 @@ private fun headerStatusText(
 private fun blePhaseLabel(phase: BleConnectionPhase): String =
     when (phase) {
         BleConnectionPhase.Idle -> "BLE idle"
+        BleConnectionPhase.Reconnecting -> "Reconnecting"
         BleConnectionPhase.Scanning -> "Scanning"
         BleConnectionPhase.Connecting -> "Connecting"
         BleConnectionPhase.RequestingMtu -> "Requesting MTU"

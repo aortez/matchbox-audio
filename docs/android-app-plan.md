@@ -439,10 +439,28 @@ Phase 6 first-slice status:
     `Orbital feat. Penelope Isles`, `Optical Delusion`, volume `80`, queue
     `1 / 8`, network `home`, connection `onionchan`.
 
+Phase 6 reconnect-slice status:
+
+- The Android BLE transport now stores the last confirmed Matchbox BLE device
+  address/name after TX notification subscription succeeds.
+- On Connect BLE, the app tries a direct GATT reconnect to that known device
+  before scanning. If that reconnect does not complete quickly, it falls back
+  to the service-UUID scan path.
+- The screen has a visible `Reconnecting` phase for this direct reconnect
+  attempt.
+- `tools/android-real-ble-smoke.mjs` now verifies known-device persistence,
+  force-stops and relaunches the app, and runs the BLE UI/status comparison a
+  second time to exercise reconnect after process restart.
+- Validated on May 16, 2026 PDT with the Pixel 7 Pro and
+  `matchbox-audio.local`: the smoke helper installed the APK, matched the Pi
+  snapshot, confirmed the known-device preference, force-stopped the app, waited
+  for `mba-bt` to return idle, relaunched, reconnected, and matched the same Pi
+  snapshot again.
+
 ## Phase 6: Android BLE Connection
 
 - [x] Add BLE scan/association flow.
-- [ ] Add known-device reconnect flow.
+- [x] Add known-device reconnect flow.
 - [x] Add GATT connect/disconnect.
 - [x] Add Matchbox service discovery.
 - [x] Add characteristic write and notification subscription.
@@ -456,7 +474,7 @@ Phase 6 first-slice status:
 - [ ] Add tests for connection state-machine behavior.
 - [x] Verify app can display `system.snapshot` from the Pi.
 - [x] Add real Pi plus Android app BLE smoke helper.
-- [ ] Verify app reconnects after app process restart.
+- [x] Verify app reconnects after app process restart.
 - [ ] Verify app reconnects after phone lock/unlock.
 - [ ] Verify app behavior while phone is connected to car Bluetooth audio.
 - [ ] Decide whether RFCOMM fallback still needs a spike.
