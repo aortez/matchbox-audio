@@ -16,8 +16,10 @@ repository = "https://github.com/aortez/matchbox-audio"
 [workspace.dependencies]
 anyhow = "1.0.100"
 axum = "0.8.6"
+bluer = { version = "0.17.4", features = ["bluetoothd"] }
 clap = { version = "4.5.50", features = ["derive"] }
 embedded-graphics = "0.8.1"
+futures-util = "0.3.31"
 mpd_client = "1.4.1"
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
 rppal = "0.22.1"

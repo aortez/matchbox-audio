@@ -1,8 +1,8 @@
 # Matchbox Bluetooth Request Router
 
-`mba-bt` is the local-first Bluetooth control daemon crate. Phase 2 keeps the
-core request handling independent from BlueZ and Android so it can be tested
-without Bluetooth hardware.
+`mba-bt` is the local-first Bluetooth control daemon crate. The core request
+handling stays independent from BlueZ and Android so it can be tested without
+Bluetooth hardware.
 
 Current pieces:
 
@@ -16,6 +16,11 @@ Current pieces:
   transport.
 - `InMemoryBleTransport` proves BLE chunks can reassemble into the same router
   path used by framed local transports.
+- The BLE-local GATT mode registers the Matchbox service through BlueZ while
+  still using `FakePlayerBackend`.
+- BLE-local treats TX notification subscription as the active app session,
+  gates RX writes by Bluetooth address, and releases the session when
+  notifications close.
 
 Run the local stdio exerciser:
 
@@ -32,4 +37,19 @@ utf8_json_payload
 ```
 
 This is intended for small developer tools and tests. Real BLE GATT
-registration remains Phase 3.
+registration starts with the BLE-local mode:
+
+```sh
+cargo run -p mba-bt -- --ble-local
+```
+
+`--ble-local` registers the Matchbox GATT service through BlueZ, advertises as
+`Matchbox Audio`, accepts RX writes, routes complete messages through
+`RequestRouter`, and sends TX notifications. It still uses `FakePlayerBackend`
+so BLE behavior can be debugged before the real `mba-player` HTTP backend is
+introduced.
+
+The active app session starts when a phone subscribes to the TX notification
+characteristic. That gives `mba-bt` a response path. A second subscriber gets a
+structured `busy` response when possible, and RX writes from inactive Bluetooth
+addresses are rejected.

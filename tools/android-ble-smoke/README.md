@@ -2,8 +2,8 @@
 
 Minimal Android client for the Phase 0 BLE proof. This is intentionally not the
 production app. It exists to prove the phone can scan, connect, subscribe to
-notifications, request MTU, write a chunked `system.hello`, and reassemble the
-chunked response.
+notifications, request MTU, write chunked `system.hello` and `system.snapshot`
+requests, and reassemble chunked responses.
 
 Open this directory in Android Studio, or build from the command line with
 Gradle, the Android Gradle plugin, and an Android SDK installed:
@@ -20,10 +20,16 @@ If the shell build fails because Gradle cannot find a Java compiler, point
 JAVA_HOME=/home/oldman/.progs/android-studio/jbr ./gradlew :app:assembleDebug
 ```
 
-Before running the app, run the Pi-side spike:
+Before running the app, run either the original Pi-side spike:
 
 ```sh
 cargo run --manifest-path tools/ble-gatt-spike/Cargo.toml
+```
+
+or the Phase 3 `mba-bt` BLE-local mode:
+
+```sh
+cargo run -p mba-bt -- --ble-local
 ```
 
 For the Matchbox target image, use the cross-build and SSH commands documented
@@ -36,14 +42,22 @@ Expected app flow:
 3. The app scans for service `1cef04f1-966e-43ad-860f-086db4f277d6`.
 4. The app connects, requests MTU 517, discovers GATT services, subscribes to
    TX notifications, and writes a chunked `system.hello`.
-5. The log should show a complete JSON response from the Pi.
+5. After the hello response completes, the app writes a chunked
+   `system.snapshot`.
+6. The log should show complete JSON responses from the Pi.
 
-Validation on May 16, 2026:
+Validation on May 16, 2026 PDT:
 
 - Phone: Pixel 7 Pro.
 - Pi target: `matchbox-audio.local`.
-- Result: scan found `Matchbox Audio`, GATT connected, MTU 517 succeeded,
-  Status read succeeded, TX notifications delivered a three-chunk
-  `system.hello` response.
+- Result with `mba-bt --ble-local`: scan found `Matchbox Audio`, GATT
+  connected, MTU 517 succeeded, Status read succeeded, and TX notifications
+  delivered three-chunk `system.hello` and `system.snapshot` responses.
+- Note: Android GATT writes are one-at-a-time. The smoke app waits for
+  `onCharacteristicWrite` before sending `system.snapshot`.
+- Note: `mba-bt` now treats TX notification subscription as the active app
+  session, so the Status payload can report `busy` and active-client details.
+- Note: force-stopping the app closed TX notifications and `mba-bt` cleared the
+  active BLE session.
 - Note: Bluetooth was initially disabled on the phone; enabling Bluetooth fixed
   the first `Bluetooth adapter unavailable or disabled` result.

@@ -91,4 +91,10 @@ Phase 2 owns everything through `RequestRouter`, `SessionGate`, the fake player,
 the framed stdio exerciser, and the in-memory BLE transport tests.
 
 Phase 3 starts at the `BlueZ GATT service` and `mba-bt GATT transport` boxes.
-That work should plug real BLE into the already-tested router path.
+The first slice is `mba-bt --ble-local`, which plugs real BlueZ GATT into the
+already-tested router path while still using `FakePlayerBackend`.
+
+Within the BLE GATT transport, `mba-bt` treats a TX notification subscription as
+the app-session boundary. The subscribed phone has opened the response path, so
+the GATT layer can attach that Bluetooth address to `SessionGate`, accept RX
+writes only from that address, and release the session when notifications close.

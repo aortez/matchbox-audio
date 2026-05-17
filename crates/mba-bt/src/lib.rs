@@ -1,11 +1,13 @@
 pub mod ble_transport;
 pub mod framed;
+pub mod gatt;
 pub mod player;
 pub mod router;
 pub mod session;
 
 pub use ble_transport::*;
 pub use framed::*;
+pub use gatt::*;
 pub use player::*;
 pub use router::*;
 pub use session::*;

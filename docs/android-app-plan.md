@@ -190,22 +190,58 @@ Exit criteria:
 
 ## Phase 3: BlueZ BLE GATT Integration
 
-- [ ] Add BlueZ BLE GATT implementation behind the transport boundary.
-- [ ] Register Matchbox GATT service with a stable service UUID.
-- [ ] Add read-only capabilities/status characteristic.
-- [ ] Add app-to-device write characteristic.
-- [ ] Add device-to-app notify characteristic.
-- [ ] Advertise useful device/service name and pairing-mode state.
-- [ ] Accept a manual BLE connection from the Android target phone.
-- [ ] Verify MTU request behavior on the Android target phone.
-- [ ] Verify chunked `system.hello` and `system.snapshot` over real BLE.
+- [x] Add BlueZ BLE GATT implementation behind the transport boundary.
+- [x] Register Matchbox GATT service with a stable service UUID.
+- [x] Add read-only capabilities/status characteristic.
+- [x] Add app-to-device write characteristic.
+- [x] Add device-to-app notify characteristic.
+- [x] Advertise useful device/service name and pairing-mode state.
+- [x] Accept a manual BLE connection from the Android target phone.
+- [x] Verify MTU request behavior on the Android target phone.
+- [x] Verify chunked `system.hello` and `system.snapshot` over real BLE.
 - [ ] Verify oversized response rejection or pagination behavior.
-- [ ] Add service logging for connection, disconnect, and protocol errors.
+- [x] Add service logging for connection, disconnect, and protocol errors.
 - [ ] Add `mba-cli bt status`.
 - [ ] Add `mba-cli bt pairing start --timeout <seconds>`.
 - [ ] Add `mba-cli bt pairing stop`.
 - [ ] Add `mba-cli bt clients`.
 - [ ] Add `mba-cli bt forget <client>`.
+
+Phase 3 first-slice status:
+
+- `mba-bt --ble-local` registers the GATT service, advertises as
+  `Matchbox Audio`, and routes RX/TX chunks through `RequestRouter` with
+  `FakePlayerBackend`.
+- The Android smoke app now sends `system.snapshot` after the `system.hello`
+  response, so a phone-side run can validate both methods over the same BLE
+  connection.
+- Validated on May 16, 2026 PDT with a Pixel 7 Pro and
+  `matchbox-audio.local`: Android negotiated MTU 517, read Status, and
+  reassembled three-chunk responses for `system.hello` and `system.snapshot`.
+- Android GATT writes are serialized by the platform. The smoke app waits for
+  `onCharacteristicWrite` before starting the next request.
+
+Phase 3 second-slice status:
+
+- `mba-bt` treats a TX notification subscription as the active app session.
+  That is the point where the phone has opened the response path.
+- The active client is tracked by Bluetooth address, adapter, MTU, and an
+  internal session token.
+- RX writes are accepted only from the active client address. Other clients are
+  rejected at the GATT write layer.
+- A second TX subscriber receives a structured `busy` protocol response where
+  possible, then its notification writer is dropped.
+- When the TX notification session closes, `mba-bt` releases `SessionGate` and
+  clears partial BLE reassembly state.
+- Status now reports `busy`, active client details, RX chunk-write count, and
+  TX chunk-send count.
+- Validated on May 16, 2026 PDT with a Pixel 7 Pro and
+  `matchbox-audio.local`: Status reported `busy=false` before subscription,
+  the subscribed client address was allowed to send RX chunks, and force-stopping
+  the app closed TX notifications and cleared the active BLE session.
+- Android negotiated MTU 517. The BlueZ notification writer exposed 512 sendable
+  bytes after bluer's safety workaround, which is still comfortably above the
+  protocol target GATT value size of 244 bytes.
 
 Exit criteria:
 

@@ -2,7 +2,10 @@ use std::io::{Read, Write};
 
 use anyhow::Context;
 use clap::Parser;
-use mba_bt::{encode_frame, FakePlayerBackend, FrameDecoder, RequestRouter, RouteOutput};
+use mba_bt::{
+    encode_frame, run_ble_gatt, BleGattOptions, FakePlayerBackend, FrameDecoder, RequestRouter,
+    RouteOutput,
+};
 use mba_protocol::{ErrorCode, ProtocolError, ProtocolMessage};
 
 #[derive(Debug, Parser)]
@@ -10,16 +13,34 @@ use mba_protocol::{ErrorCode, ProtocolError, ProtocolMessage};
 struct Args {
     #[arg(long, help = "Read and write length-prefixed protocol frames on stdio")]
     stdio: bool,
+    #[arg(
+        long,
+        help = "Advertise the local BLE GATT server with a fake player backend"
+    )]
+    ble_local: bool,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "mba_bt=info".into()),
+        )
+        .init();
+
     let args = Args::parse();
-    if !args.stdio {
-        anyhow::bail!("no mode selected; use --stdio");
+    if args.stdio == args.ble_local {
+        anyhow::bail!("select exactly one mode: --stdio or --ble-local");
     }
 
-    let router = RequestRouter::new(FakePlayerBackend::ready());
+    if args.ble_local {
+        let router =
+            RequestRouter::new(FakePlayerBackend::ready()).with_build_version("mba-bt-ble-local");
+        return run_ble_gatt(router, BleGattOptions::default()).await;
+    }
+
+    let router = RequestRouter::new(FakePlayerBackend::ready()).with_build_version("mba-bt-stdio");
     serve_stdio(router).await
 }
 

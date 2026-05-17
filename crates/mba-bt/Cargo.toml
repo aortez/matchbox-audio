@@ -7,8 +7,12 @@ repository.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+bluer.workspace = true
 clap.workspace = true
+futures-util.workspace = true
 mba-protocol = { path = "../mba-protocol" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

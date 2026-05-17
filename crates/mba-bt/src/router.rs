@@ -5,6 +5,7 @@ use mba_protocol::{
     METHOD_SYSTEM_SNAPSHOT,
 };
 use serde_json::{json, Value};
+use tracing::info;
 
 use crate::{PlayerBackend, PlayerError};
 
@@ -67,6 +68,7 @@ where
         method: &str,
         params: Option<Value>,
     ) -> RouteOutput {
+        info!(request_id = id, %method, "routing protocol request");
         match method {
             METHOD_SYSTEM_HELLO => self.system_hello(id, params),
             _ if !self.trusted => RouteOutput::single(ProtocolMessage::error_response(

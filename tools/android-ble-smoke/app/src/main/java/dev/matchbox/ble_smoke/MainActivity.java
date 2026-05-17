@@ -68,6 +68,10 @@ public class MainActivity extends Activity {
     private BluetoothGattCharacteristic txCharacteristic;
     private PartialMessage partialTx;
     private int nextTransportMessageId = 1;
+    private int nextAppRequestId = 1;
+    private boolean snapshotRequested;
+    private boolean snapshotPendingAfterWrite;
+    private boolean writeInFlight;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -141,6 +145,14 @@ public class MainActivity extends Activity {
             appendLog("BluetoothLeScanner unavailable.");
             return;
         }
+
+        pendingWrites.clear();
+        partialTx = null;
+        nextTransportMessageId = 1;
+        nextAppRequestId = 1;
+        snapshotRequested = false;
+        snapshotPendingAfterWrite = false;
+        writeInFlight = false;
 
         appendLog("Scanning for Matchbox service " + SERVICE_UUID);
         ScanFilter filter = new ScanFilter.Builder()
@@ -272,8 +284,18 @@ public class MainActivity extends Activity {
                 int status
         ) {
             appendLog("RX write status=" + status);
+            writeInFlight = false;
             if (status == BluetoothGatt.GATT_SUCCESS) {
-                writeNextChunk();
+                if (!pendingWrites.isEmpty()) {
+                    writeNextChunk();
+                } else {
+                    appendLog("All RX chunks written.");
+                    if (snapshotPendingAfterWrite) {
+                        snapshotPendingAfterWrite = false;
+                        appendLog("Previous write completed; requesting pending system.snapshot.");
+                        sendSnapshot();
+                    }
+                }
             }
         }
 
@@ -340,24 +362,43 @@ public class MainActivity extends Activity {
             JSONObject params = new JSONObject()
                     .put("app", "android-ble-smoke")
                     .put("supported_protocol_versions", new JSONArray().put(1));
-            JSONObject request = new JSONObject()
-                    .put("type", "request")
-                    .put("id", 1)
-                    .put("method", "system.hello")
-                    .put("params", params);
-
-            byte[] payload = request.toString().getBytes(StandardCharsets.UTF_8);
-            int messageId = nextTransportMessageId++;
-            pendingWrites.clear();
-            pendingWrites.addAll(encodeChunks(messageId, payload));
-            appendLog("Writing system.hello in " + pendingWrites.size() + " chunk(s).");
-            writeNextChunk();
+            sendProtocolRequest("system.hello", params);
         } catch (Exception e) {
             appendLog("Failed to build system.hello: " + e);
         }
     }
 
+    private void sendSnapshot() {
+        try {
+            snapshotRequested = true;
+            sendProtocolRequest("system.snapshot", null);
+        } catch (Exception e) {
+            appendLog("Failed to build system.snapshot: " + e);
+        }
+    }
+
+    private void sendProtocolRequest(String method, JSONObject params) throws Exception {
+        JSONObject request = new JSONObject()
+                .put("type", "request")
+                .put("id", nextAppRequestId++)
+                .put("method", method);
+        if (params != null) {
+            request.put("params", params);
+        }
+
+        byte[] payload = request.toString().getBytes(StandardCharsets.UTF_8);
+        int messageId = nextTransportMessageId++;
+        pendingWrites.clear();
+        pendingWrites.addAll(encodeChunks(messageId, payload));
+        appendLog("Writing " + method + " in " + pendingWrites.size() + " chunk(s).");
+        writeNextChunk();
+    }
+
     private void writeNextChunk() {
+        if (writeInFlight) {
+            appendLog("RX write already in flight; waiting.");
+            return;
+        }
         if (gatt == null || rxCharacteristic == null || pendingWrites.isEmpty()) {
             if (pendingWrites.isEmpty()) {
                 appendLog("All RX chunks written.");
@@ -373,7 +414,9 @@ public class MainActivity extends Activity {
                     chunk,
                     BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
             appendLog("Queued RX chunk bytes=" + chunk.length + " result=" + result);
-            if (result != BluetoothStatusCodes.SUCCESS) {
+            if (result == BluetoothStatusCodes.SUCCESS) {
+                writeInFlight = true;
+            } else {
                 appendLog("RX write did not queue; stopping.");
             }
         } else {
@@ -382,6 +425,7 @@ public class MainActivity extends Activity {
             @SuppressWarnings("deprecation")
             boolean queued = gatt.writeCharacteristic(rxCharacteristic);
             appendLog("Queued RX chunk bytes=" + chunk.length + " queued=" + queued);
+            writeInFlight = queued;
         }
     }
 
@@ -395,12 +439,35 @@ public class MainActivity extends Activity {
         try {
             byte[] completed = reassembleChunk(value);
             if (completed != null) {
+                String json = new String(completed, StandardCharsets.UTF_8);
                 appendLog("Complete TX message:");
-                appendLog(new String(completed, StandardCharsets.UTF_8));
+                appendLog(json);
+                maybeSendSnapshot(json);
             }
         } catch (Exception e) {
             appendLog("Failed to parse TX chunk: " + e.getMessage());
             partialTx = null;
+        }
+    }
+
+    private void maybeSendSnapshot(String json) {
+        if (snapshotRequested) {
+            return;
+        }
+        try {
+            JSONObject response = new JSONObject(json);
+            if ("response".equals(response.optString("type"))) {
+                if (writeInFlight) {
+                    appendLog("Hello response complete; waiting for RX write callback before system.snapshot.");
+                    snapshotPendingAfterWrite = true;
+                    snapshotRequested = true;
+                } else {
+                    appendLog("Hello response complete; requesting system.snapshot.");
+                    sendSnapshot();
+                }
+            }
+        } catch (Exception e) {
+            appendLog("Could not inspect response JSON before snapshot request: " + e.getMessage());
         }
     }
 

@@ -39,14 +39,21 @@ impl InMemoryBleTransport {
         let output = router.route_bytes(&message_bytes).await;
         let mut tx_chunks = Vec::new();
         for message in output.messages() {
-            let bytes = message
-                .to_json_bytes()
-                .map_err(BleTransportError::Message)?;
-            let message_id = self.next_transport_message_id();
-            tx_chunks.extend(ble::encode_chunks(message_id, &bytes)?);
+            tx_chunks.extend(self.encode_outbound_message(&message)?);
         }
 
         Ok(Some(tx_chunks))
+    }
+
+    pub fn encode_outbound_message(
+        &mut self,
+        message: &ProtocolMessage,
+    ) -> Result<Vec<Vec<u8>>, BleTransportError> {
+        let bytes = message
+            .to_json_bytes()
+            .map_err(BleTransportError::Message)?;
+        let message_id = self.next_transport_message_id();
+        Ok(ble::encode_chunks(message_id, &bytes)?)
     }
 
     fn next_transport_message_id(&mut self) -> u32 {
