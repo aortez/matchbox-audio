@@ -78,6 +78,25 @@ class NowPlayingScreenTest {
     }
 
     @Test
+    fun busyStateShowsDeviceBusyStatus() {
+        compose.setContent {
+            NowPlayingScreen(
+                state = NowPlayingUiState.failed("Another app is connected"),
+                onRefresh = {},
+                usingBle = true,
+                bleConnectionState = BleConnectionState(
+                    phase = BleConnectionPhase.Busy,
+                    errorMessage = "Another app is connected",
+                ),
+            )
+        }
+
+        compose.onNodeWithTag("connection-status").assertIsDisplayed()
+        compose.onAllNodesWithText("Device busy").assertCountEquals(2)
+        compose.onAllNodesWithText("Another app is connected").assertCountEquals(2)
+    }
+
+    @Test
     fun permissionDeniedShowsBluetoothStatus() {
         compose.setContent {
             NowPlayingScreen(

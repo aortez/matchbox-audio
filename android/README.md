@@ -44,11 +44,12 @@ Run the real Pi plus Android BLE smoke helper:
 
 The helper installs the debug APK, connects the app over BLE, compares the
 visible now-playing fields with `http://matchbox-audio.local:8090/api/v1/status`,
-verifies known-device persistence, force-stops and relaunches the app to
-exercise reconnect, locks and wakes the phone, and captures
-`/tmp/matchbox-android-real-ble-smoke.png`. It uses `JAVA_HOME` when that points
-at a JDK with `bin/javac`; otherwise it tries Android Studio's bundled JBR at
-`/home/oldman/.progs/android-studio/jbr`.
+verifies that `mba-bt` reports the app as the active session, verifies
+known-device persistence, force-stops and relaunches the app to exercise
+reconnect, locks and wakes the phone, and captures
+`/tmp/matchbox-android-real-ble-smoke.png`. It uses `JAVA_HOME` when that
+points at a JDK with `bin/javac`; otherwise it tries Android Studio's bundled
+JBR at `/home/oldman/.progs/android-studio/jbr`.
 
 The checked-in Gradle project expects a local Android SDK. Keep
 `local.properties` out of git; Android Studio can generate it, or copy the SDK

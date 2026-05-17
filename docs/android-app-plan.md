@@ -461,6 +461,18 @@ Phase 6 reconnect-slice status:
   status, and verifies the Android UI still reaches `BLE ready` with matching
   now-playing values.
 
+Phase 6 busy-device status:
+
+- `mba-bt` already rejects a second TX notification subscriber with protocol
+  error code `busy`; Android now preserves protocol error codes instead of
+  treating every error response as a generic failure.
+- A `busy` response moves the Android BLE transport into a dedicated
+  `Device busy` phase, closes the rejected GATT connection, completes pending
+  requests with `Another app is connected`, and lets a later refresh retry.
+- The real BLE smoke helper now also verifies that the Pi reports `busy: true`
+  while the Android app owns the active BLE session. A full second-client busy
+  smoke still needs either a second phone or a separate host BLE central.
+
 ## Phase 6: Android BLE Connection
 
 - [x] Add BLE scan/association flow.
@@ -473,7 +485,7 @@ Phase 6 reconnect-slice status:
 - [x] Add connection status UI.
 - [x] Add permission-denied UI.
 - [ ] Add auth-required UI.
-- [ ] Add busy-device UI.
+- [x] Add busy-device UI.
 - [ ] Add reconnect backoff.
 - [ ] Add tests for connection state-machine behavior.
 - [x] Verify app can display `system.snapshot` from the Pi.

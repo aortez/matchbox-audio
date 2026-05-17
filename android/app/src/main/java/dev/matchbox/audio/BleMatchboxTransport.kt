@@ -51,6 +51,7 @@ enum class BleConnectionPhase {
     Ready,
     Disconnected,
     Failed,
+    Busy,
 }
 
 data class BleConnectionState(
@@ -139,6 +140,7 @@ class BleMatchboxTransport(
                 BleConnectionPhase.Idle,
                 BleConnectionPhase.Disconnected,
                 BleConnectionPhase.Failed,
+                BleConnectionPhase.Busy,
                 -> connectOnMain()
             }
         }
@@ -147,6 +149,7 @@ class BleMatchboxTransport(
             connectionState.first {
                 it.phase == BleConnectionPhase.Ready ||
                     it.phase == BleConnectionPhase.Failed ||
+                    it.phase == BleConnectionPhase.Busy ||
                     it.phase == BleConnectionPhase.Disconnected
             }
         }
@@ -171,8 +174,8 @@ class BleMatchboxTransport(
                 )
             val response = sendRequest("system.hello", params)
             val root = JSONObject(response)
-            if (!root.optBoolean("ok")) {
-                throw BleTransportException(protocolErrorMessage(root))
+            BleProtocolMessages.errorFromResponse(root)?.let { error ->
+                throw BleTransportException(BleProtocolMessages.userFacingMessage(error))
             }
             withContext(mainDispatcher) {
                 helloCompleted = true
@@ -225,6 +228,7 @@ class BleMatchboxTransport(
             BleConnectionPhase.Idle,
             BleConnectionPhase.Disconnected,
             BleConnectionPhase.Failed,
+            BleConnectionPhase.Busy,
             -> Unit
         }
 
@@ -579,22 +583,21 @@ class BleMatchboxTransport(
             return
         }
 
+        val protocolError = BleProtocolMessages.errorFromResponse(root)
+        if (protocolError?.code == BleProtocolMessages.ERROR_BUSY) {
+            markBusyOnMain()
+            return
+        }
+
         val requestId = root.optInt("id", -1)
         val pending = pendingResponses[requestId] ?: return
         if (root.optBoolean("ok")) {
             pending.complete(json)
         } else {
-            pending.completeExceptionally(BleTransportException(protocolErrorMessage(root)))
+            val message = protocolError?.let(BleProtocolMessages::userFacingMessage)
+                ?: "BLE protocol request failed"
+            pending.completeExceptionally(BleTransportException(message))
         }
-    }
-
-    private fun protocolErrorMessage(root: JSONObject): String {
-        val error = root.optJSONObject("error") ?: return "BLE protocol request failed"
-        val code = error.optString("code").takeIf { it.isNotBlank() }
-        val message = error.optString("message").takeIf { it.isNotBlank() }
-        return listOfNotNull(code, message)
-            .joinToString(": ")
-            .ifBlank { "BLE protocol request failed" }
     }
 
     private val scanCallback = object : ScanCallback() {
@@ -783,6 +786,25 @@ class BleMatchboxTransport(
                 address = address,
                 name = state.deviceName,
             ),
+        )
+    }
+
+    private fun markBusyOnMain() {
+        val message = "Another app is connected"
+        val error = BleTransportException(message)
+        val current = _connectionState.value
+        mainHandler.removeCallbacks(reconnectTimeoutRunnable)
+        stopScanOnMain()
+        closeGattOnMain(updateState = false)
+        resetProtocolStateOnMain()
+        completePendingRequests(error)
+        _connectionState.value = BleConnectionState(
+            phase = BleConnectionPhase.Busy,
+            deviceName = current.deviceName,
+            deviceAddress = current.deviceAddress,
+            mtu = current.mtu,
+            statusJson = current.statusJson,
+            errorMessage = message,
         )
     }
 

@@ -305,20 +305,38 @@ function parseBtStatus(text) {
   return values;
 }
 
-async function waitForBtIdle(remoteTarget, timeoutMs) {
+async function waitForBtState(remoteTarget, timeoutMs, description, predicate) {
   const deadline = Date.now() + timeoutMs;
   let lastStatus = '';
 
   while (Date.now() < deadline) {
     lastStatus = ssh(remoteTarget, 'mba-cli bt status');
     const status = parseBtStatus(lastStatus);
-    if (status.get('advertising') === 'true' && status.get('busy') === 'false') {
+    if (predicate(status)) {
       return lastStatus;
     }
     await sleep(1000);
   }
 
-  throw new Error(`Timed out waiting for Pi BLE advertising idle state:\n${lastStatus}`);
+  throw new Error(`Timed out waiting for Pi BLE ${description}:\n${lastStatus}`);
+}
+
+async function waitForBtIdle(remoteTarget, timeoutMs) {
+  return waitForBtState(
+    remoteTarget,
+    timeoutMs,
+    'advertising idle state',
+    status => status.get('advertising') === 'true' && status.get('busy') === 'false',
+  );
+}
+
+async function waitForBtBusy(remoteTarget, timeoutMs) {
+  return waitForBtState(
+    remoteTarget,
+    timeoutMs,
+    'active session state',
+    status => status.get('advertising') === 'true' && status.get('busy') === 'true',
+  );
 }
 
 function dumpUi(serial) {
@@ -564,6 +582,8 @@ async function main() {
   info('Launching Android app and connecting BLE');
   await launchConnectAndVerify(deviceSerial, activity, expected, timeoutMs);
   success('Android BLE snapshot matches Pi status');
+  await waitForBtBusy(remoteTarget, timeoutMs);
+  success('Pi BLE reports the Android app as the active session');
   await waitForKnownDeviceStored(deviceSerial, appId, timeoutMs);
   success('Android app stored known BLE device');
 
@@ -577,6 +597,8 @@ async function main() {
     info('Relaunching Android app for known-device reconnect check');
     await launchConnectAndVerify(deviceSerial, activity, expected, timeoutMs);
     success('Android BLE reconnect after app restart matches Pi status');
+    await waitForBtBusy(remoteTarget, timeoutMs);
+    success('Pi BLE reports the reconnected app as the active session');
   }
 
   if (lockCheck) {
@@ -591,6 +613,8 @@ async function main() {
     log(`Expecting after unlock: ${lockExpected.join(' | ')}`);
     await launchConnectAndVerify(deviceSerial, activity, lockExpected, timeoutMs);
     success('Android BLE snapshot matches Pi status after lock/unlock');
+    await waitForBtBusy(remoteTarget, timeoutMs);
+    success('Pi BLE still reports an active Android session after lock/unlock');
   }
 
   captureScreenshot(deviceSerial, output);
